@@ -1,0 +1,19 @@
+# Vimdoc generated tags (generate with :helptags doc/ or in CI)
+doc/tags
+
+# Test dependencies bootstrapped by make deps
+.tests/
+
+# Local Lua Language Server config (generated per-editor)
+.luarc.json
+.luarc.jsonc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vim/
+*.swp
+*.swo
+*~

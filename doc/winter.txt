@@ -1,0 +1,160 @@
+*winter.txt*  Neovim snacks.nvim picker for winter workspace navigation
+
+Author:   Paul Gross <paul@grosscode.net>
+License:  MIT
+Homepage: https://github.com/paul-gross/winter-nvim
+
+==============================================================================
+CONTENTS                                                        *winter-contents*
+
+  1. Introduction ..................................... |winter-intro|
+  2. Requirements ..................................... |winter-requirements|
+  3. Installation ..................................... |winter-installation|
+  4. Setup ............................................ |winter-setup|
+  5. Configuration .................................... |winter-config|
+  6. Commands ......................................... |winter-commands|
+  7. Health check ..................................... |winter-health|
+  8. Development ...................................... |winter-development|
+
+==============================================================================
+INTRODUCTION                                                      *winter-intro*
+
+winter.nvim surfaces a winter (https://github.com/paul-gross/winter) workspace
+layout as a snacks.nvim picker. Fuzzy-find any `<env>/<repo>` feature-environment
+worktree or standalone repository and switch Neovim's working directory into it.
+
+Data is sourced by shelling out to: >
+  winter ws worktrees --json
+<
+The command is expected to return a JSON array of worktree descriptors with at
+least `env`, `repo`, and `path` fields. When invoked outside of a winter
+workspace (non-zero exit or missing CLI), the plugin emits a clear error
+message rather than crashing.
+
+Note: The picker implementation ships in a follow-up release. The current
+scaffold registers all commands and configuration; calling |:Winter| shows a
+"not yet implemented" warning until the feature lands.
+
+==============================================================================
+REQUIREMENTS                                                *winter-requirements*
+
+  - Neovim >= 0.9
+  - folke/snacks.nvim  (https://github.com/folke/snacks.nvim)
+  - winter CLI on PATH (https://github.com/paul-gross/winter)
+
+Run |:checkhealth| winter to confirm all requirements are met.
+
+==============================================================================
+INSTALLATION                                                *winter-installation*
+
+With lazy.nvim: >lua
+  {
+    "paul-gross/winter-nvim",
+    dependencies = { "folke/snacks.nvim" },
+    opts = {},
+    -- optional keymap:
+    -- keys = { { "<leader>fw", "<cmd>Winter<cr>", desc = "Winter workspace picker" } },
+  }
+<
+
+With packer.nvim: >lua
+  use {
+    "paul-gross/winter-nvim",
+    requires = { "folke/snacks.nvim" },
+    config = function()
+      require("winter").setup()
+    end,
+  }
+<
+
+==============================================================================
+SETUP                                                             *winter-setup*
+
+Call `setup()` once, typically from your plugin manager's `config` callback.
+Calling `setup()` is required before using the plugin. >lua
+
+  require("winter").setup({
+    picker = {
+      layout = "ivy",   -- snacks.nvim layout name
+      preview = false,
+    },
+    winter_cmd = "winter",
+    keymaps = {
+      open = "<leader>fw",  -- mapped in normal mode to :Winter
+    },
+  })
+<
+
+All fields are optional; unspecified fields inherit their defaults.
+
+==============================================================================
+CONFIGURATION                                                    *winter-config*
+
+Default configuration: >lua
+
+  require("winter").setup({
+    -- Options for the snacks.nvim picker window
+    picker = {
+      -- snacks.nvim layout name passed to Snacks.picker().
+      -- nil uses the snacks default layout.
+      layout = nil,           -- string | nil
+
+      -- Whether to show a file-tree preview panel in the picker.
+      preview = false,        -- boolean
+    },
+
+    -- The winter CLI executable name (or full path).
+    -- Useful if winter is not on PATH or installed under a different name.
+    winter_cmd = "winter",    -- string
+
+    -- Optional keymaps registered during setup().
+    keymaps = {
+      -- If set, map this key in normal mode to open the picker.
+      open = nil,             -- string | nil  e.g. "<leader>fw"
+    },
+  })
+<
+
+==============================================================================
+COMMANDS                                                        *winter-commands*
+
+                                                                        *:Winter*
+:Winter
+  Open the winter workspace picker. Equivalent to calling
+  `require("winter").open()` from Lua.
+
+                                                                   *:WinterRepos*
+:WinterRepos
+  Alias for |:Winter|. In a future release this may be narrowed to show
+  standalone repositories only (omitting per-env worktrees).
+
+==============================================================================
+HEALTH CHECK                                                      *winter-health*
+
+Run the built-in health check to verify your setup: >
+
+  :checkhealth winter
+<
+
+The health check reports:
+  - Whether snacks.nvim can be required
+  - Whether the `winter` CLI is executable on PATH (and its version if found)
+
+==============================================================================
+DEVELOPMENT                                                   *winter-development*
+
+Source layout: >
+  lua/winter/init.lua      -- public API: setup(), open()
+  lua/winter/config.lua    -- default config + validation
+  lua/winter/health.lua    -- :checkhealth winter
+  plugin/winter.lua        -- plugin file: guards, user commands
+  tests/                   -- test suite (mini.test)
+<
+
+Linting and formatting: >
+  make lint    # stylua --check + luacheck
+  make test    # mini.test suite
+<
+
+==============================================================================
+vim:tw=78:ts=8:ft=help:norl:
