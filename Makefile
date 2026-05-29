@@ -11,7 +11,7 @@ deps:
 # Run the mini.test suite
 test: deps
 	nvim --headless --noplugin -u tests/minimal_init.lua \
-		-c "lua MiniTest.run({ execute = { reporter = MiniTest.gen_reporter.stdout({ group_depth = 1 }) } })" \
+		-c "lua MiniTest.run({ collect = { find_files = function() return vim.fn.globpath('tests', '**/*_spec.lua', true, true) end }, execute = { reporter = MiniTest.gen_reporter.stdout({ group_depth = 1 }) } })" \
 		+qa
 
 # Check formatting (stylua) and linting (luacheck)

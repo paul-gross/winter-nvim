@@ -26,4 +26,4 @@ vim.opt.rtp:prepend(mini_path)
 -- in the headless test environment (no snacks installed in CI test isolation)
 package.loaded["snacks"] = {}
 
-require("mini.test")
+require("mini.test").setup()

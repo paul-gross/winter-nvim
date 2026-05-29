@@ -4,25 +4,90 @@ if vim.g.loaded_winter then
 end
 vim.g.loaded_winter = true
 
--- Require Neovim 0.9+ (minimum for snacks.nvim)
-if vim.fn.has("nvim-0.9") == 0 then
+-- Require Neovim 0.10+ (vim.system, used in cli.run, requires 0.10)
+if vim.fn.has("nvim-0.10") == 0 then
   vim.notify(
-    "winter.nvim requires Neovim >= 0.9. Please upgrade your Neovim installation.",
+    "winter.nvim requires Neovim >= 0.10. Please upgrade your Neovim installation.",
     vim.log.levels.ERROR
   )
   return
 end
 
--- :Winter — open the workspace picker
-vim.api.nvim_create_user_command("Winter", function()
-  require("winter").open()
+-- Subcommand dispatch table. Adding a new feature is one line here.
+-- Each handler receives a list of remaining args (after the subcommand word).
+local subcommands = {
+  worktrees = function(args)
+    local opts = (#args > 0) and { winter_args = args } or nil
+    require("winter").worktrees(opts)
+  end,
+}
+
+-- :WinterWorktrees [winter-args...]
+-- Opens the worktrees picker. Any args passed to the command are used as the
+-- global winter args for that invocation (overriding config.winter_args).
+-- Example: :WinterWorktrees --winter=/home/me/ws/alpha/winter
+vim.api.nvim_create_user_command("WinterWorktrees", function(cmd_opts)
+  local args = cmd_opts.fargs
+  local opts = (#args > 0) and { winter_args = args } or nil
+  require("winter").worktrees(opts)
 end, {
-  desc = "Open the winter workspace picker",
+  nargs = "*",
+  desc = "Open the winter worktrees picker (optional: pass global winter args)",
+  complete = function()
+    return {}
+  end,
 })
 
--- :WinterRepos — alias for :Winter (future: may filter to repos only)
-vim.api.nvim_create_user_command("WinterRepos", function()
-  require("winter").open()
+-- :Winter [subcommand] [winter-args...]
+-- Umbrella dispatcher. With no args defaults to worktrees.
+-- :Winter worktrees [args...]  → worktrees picker
+-- :Winter <Tab>                → completes available subcommands
+vim.api.nvim_create_user_command("Winter", function(cmd_opts)
+  local args = cmd_opts.fargs
+
+  -- No args: default to worktrees.
+  if #args == 0 then
+    require("winter").worktrees()
+    return
+  end
+
+  local subcmd = args[1]
+  local rest = {}
+  for i = 2, #args do
+    rest[#rest + 1] = args[i]
+  end
+
+  local handler = subcommands[subcmd]
+  if handler then
+    handler(rest)
+  else
+    local available = {}
+    for name, _ in pairs(subcommands) do
+      available[#available + 1] = name
+    end
+    table.sort(available)
+    vim.notify(
+      ("winter.nvim: unknown subcommand %q. Available: %s"):format(subcmd, table.concat(available, ", ")),
+      vim.log.levels.ERROR
+    )
+  end
 end, {
-  desc = "Open the winter workspace picker (repos alias)",
+  nargs = "*",
+  desc = "Winter integration: :Winter [worktrees] [winter-args...]",
+  complete = function(arg_lead, cmd_line, _)
+    -- Complete subcommand names on the first positional argument.
+    local parts = vim.split(vim.trim(cmd_line), "%s+")
+    -- parts[1] is "Winter", parts[2] is the subcommand being typed.
+    if #parts <= 2 then
+      local names = {}
+      for name, _ in pairs(subcommands) do
+        if name:sub(1, #arg_lead) == arg_lead then
+          names[#names + 1] = name
+        end
+      end
+      table.sort(names)
+      return names
+    end
+    return {}
+  end,
 })

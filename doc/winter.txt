@@ -1,4 +1,4 @@
-*winter.txt*  Neovim snacks.nvim picker for winter workspace navigation
+*winter.txt*  Neovim integration for winter workspaces
 
 Author:   Paul Gross <paul@grosscode.net>
 License:  MIT
@@ -13,32 +13,39 @@ CONTENTS                                                        *winter-contents
   4. Setup ............................................ |winter-setup|
   5. Configuration .................................... |winter-config|
   6. Commands ......................................... |winter-commands|
-  7. Health check ..................................... |winter-health|
-  8. Development ...................................... |winter-development|
+  7. Lua API ........................................... |winter-api|
+  8. Session behaviour ................................. |winter-sessions|
+  9. Health check ..................................... |winter-health|
+ 10. Development ...................................... |winter-development|
 
 ==============================================================================
 INTRODUCTION                                                      *winter-intro*
 
-winter.nvim surfaces a winter (https://github.com/paul-gross/winter) workspace
-layout as a snacks.nvim picker. Fuzzy-find any `<env>/<repo>` feature-environment
-worktree or standalone repository and switch Neovim's working directory into it.
+winter.nvim provides rich editor integration with winter workspaces
+(https://github.com/paul-gross/winter). The first integration is a
+snacks.nvim worktrees picker: fuzzy-find any `<env>/<repo>` feature-
+environment worktree or standalone repository and switch Neovim's working
+directory into it, preferring a saved Neovim session for the target over a
+bare `:cd`. More integrations (e.g. a dashboard) are planned.
 
 Data is sourced by shelling out to: >
-  winter ws worktrees --json
+  winter [global-args] ws worktrees --json
 <
-The command is expected to return a JSON array of worktree descriptors with at
-least `env`, `repo`, and `path` fields. When invoked outside of a winter
-workspace (non-zero exit or missing CLI), the plugin emits a clear error
-message rather than crashing.
+The command returns a JSON array of worktree descriptors; each element has
+these keys: `kind` ("worktree" or "standalone"), `env`, `repo`, `name`,
+`label`, and `path` (absolute). The `label` field (e.g. "alpha/winter" or
+"winter-harness") is what the fuzzy matcher operates on.
 
-Note: The picker implementation ships in a follow-up release. The current
-scaffold registers all commands and configuration; calling |:Winter| shows a
-"not yet implemented" warning until the feature lands.
+When invoked outside of a winter workspace (no `.winter/config.toml` +
+`tools/winter-cli/` ancestor found), the plugin emits: >
+  winter.nvim: not inside a winter workspace
+<
+and returns without opening a picker or raising an error.
 
 ==============================================================================
 REQUIREMENTS                                                *winter-requirements*
 
-  - Neovim >= 0.9
+  - Neovim >= 0.10  (vim.system, used to invoke the winter CLI, requires 0.10)
   - folke/snacks.nvim  (https://github.com/folke/snacks.nvim)
   - winter CLI on PATH (https://github.com/paul-gross/winter)
 
@@ -53,7 +60,9 @@ With lazy.nvim: >lua
     dependencies = { "folke/snacks.nvim" },
     opts = {},
     -- optional keymap:
-    -- keys = { { "<leader>fw", "<cmd>Winter<cr>", desc = "Winter workspace picker" } },
+    -- keys = {
+    --   { "<leader>fw", "<cmd>WinterWorktrees<cr>", desc = "Winter: find workspace" },
+    -- },
   }
 <
 
@@ -71,21 +80,18 @@ With packer.nvim: >lua
 SETUP                                                             *winter-setup*
 
 Call `setup()` once, typically from your plugin manager's `config` callback.
-Calling `setup()` is required before using the plugin. >lua
+All fields are optional; unspecified fields inherit their defaults. >lua
 
   require("winter").setup({
-    picker = {
-      layout = "ivy",   -- snacks.nvim layout name
-      preview = false,
-    },
-    winter_cmd = "winter",
-    keymaps = {
-      open = "<leader>fw",  -- mapped in normal mode to :Winter
-    },
+    winter_cmd  = "winter",
+    winter_args = { "--winter=/home/me/ws/alpha/winter" },
+    picker      = { layout = "ivy" },
+    use_sessions = true,
+    session_dir = vim.fn.stdpath("state") .. "/winter-nvim/sessions",
+    cd_command  = "cd",
+    keymaps     = { open = "<leader>fw" },
   })
 <
-
-All fields are optional; unspecified fields inherit their defaults.
 
 ==============================================================================
 CONFIGURATION                                                    *winter-config*
@@ -93,24 +99,49 @@ CONFIGURATION                                                    *winter-config*
 Default configuration: >lua
 
   require("winter").setup({
-    -- Options for the snacks.nvim picker window
+    -- The winter CLI executable name (or full path).
+    -- Useful if winter is not on PATH or installed under a different name.
+    winter_cmd = "winter",                 -- string
+
+    -- Global args inserted immediately after winter_cmd and before the
+    -- subcommand on EVERY winter invocation. NOTE: --winter=PATH must be the
+    -- FIRST argument after the executable; the plugin guarantees this ordering.
+    -- Example: run a specific winter-cli source tree during development:
+    --   winter_args = { "--winter=/home/me/ws/alpha/winter" }
+    winter_args = {},                      -- string[]
+
+    -- When true, switch_to() loads an existing Neovim session for the target
+    -- path if one exists. Does not create new sessions unless create_sessions
+    -- is also true. When false, switch_to() only runs the cd command.
+    use_sessions = true,                   -- boolean
+
+    -- Save a Neovim session on switch so future visits restore your layout.
+    -- When false (default), winter only LOADS sessions that already exist and
+    -- otherwise just :cd's — it never creates session files on its own.
+    -- Set to true to have winter write a session after each switch.
+    create_sessions = false,               -- boolean
+
+    -- Directory where per-path session files are stored.
+    -- Created automatically (mkdir -p) on first use.
+    session_dir = vim.fn.stdpath("state") .. "/winter-nvim/sessions",  -- string
+
+    -- Vim cd command used when switching directories.
+    -- "cd"  — global (all windows and tabs)
+    -- "tcd" — tab-local
+    -- "lcd" — window-local
+    cd_command = "cd",                     -- string
+
+    -- Options for the snacks.nvim picker window.
     picker = {
       -- snacks.nvim layout name passed to Snacks.picker().
       -- nil uses the snacks default layout.
-      layout = nil,           -- string | nil
-
-      -- Whether to show a file-tree preview panel in the picker.
-      preview = false,        -- boolean
+      layout = nil,                        -- string | nil
     },
-
-    -- The winter CLI executable name (or full path).
-    -- Useful if winter is not on PATH or installed under a different name.
-    winter_cmd = "winter",    -- string
 
     -- Optional keymaps registered during setup().
     keymaps = {
-      -- If set, map this key in normal mode to open the picker.
-      open = nil,             -- string | nil  e.g. "<leader>fw"
+      -- If set, maps this key in normal mode to open the worktrees picker.
+      open = nil,                          -- string | nil  e.g. "<leader>fw"
     },
   })
 <
@@ -118,15 +149,107 @@ Default configuration: >lua
 ==============================================================================
 COMMANDS                                                        *winter-commands*
 
-                                                                        *:Winter*
-:Winter
-  Open the winter workspace picker. Equivalent to calling
-  `require("winter").open()` from Lua.
+                                                              *:WinterWorktrees*
+:WinterWorktrees [winter-args...]                              *winter-worktrees*
+  Open the winter worktrees picker. Any arguments passed to the command are
+  used as the global winter args for that single invocation, overriding
+  `config.winter_args`. This is useful for targeting a dev CLI build:
+>
+    :WinterWorktrees --winter=/home/me/ws/alpha/winter
+<
+  The plugin ensures `--winter=PATH` is ordered immediately after the
+  executable name (before the subcommand), as required by the winter wrapper.
 
-                                                                   *:WinterRepos*
-:WinterRepos
-  Alias for |:Winter|. In a future release this may be narrowed to show
-  standalone repositories only (omitting per-env worktrees).
+                                                                        *:Winter*
+:Winter [subcommand] [winter-args...]
+  Umbrella dispatcher for all winter.nvim integrations. With no arguments,
+  defaults to the worktrees picker. Tab-completes available subcommands.
+
+  Subcommands:
+    worktrees [winter-args...]   Open the worktrees picker (see |:WinterWorktrees|)
+
+  Unknown subcommand: emits an ERROR notification listing available subcommands.
+
+  Examples: >
+    :Winter                      " opens worktrees picker
+    :Winter worktrees            " same
+    :Winter worktrees --winter=/home/me/ws/alpha/winter
+<
+
+==============================================================================
+LUA API                                                            *winter-api*
+
+                                                              *winter.setup()*
+`require("winter").setup({opts})`
+  Initialise the plugin, deep-merging `opts` with the defaults.
+  See |winter-config| for available options.
+
+                                                          *winter.worktrees()*
+`require("winter").worktrees({opts})`
+  Discover the workspace root, fetch `winter [global_args] ws worktrees
+  --json`, and open the snacks.nvim picker. Selecting an entry calls
+  |winter.switch_to()|.
+
+  `opts` is an optional table:
+    `winter_args` (string[]) — override `config.winter_args` for this call only.
+
+                                                               *winter.open()*
+`require("winter").open({opts})`
+  Deprecated alias for |winter.worktrees()|. Preserved for backwards
+  compatibility; prefer `worktrees()` for new code.
+
+                                                          *winter.switch_to()*
+`require("winter").switch_to({path}, {label})`
+  Switch Neovim's working directory to `path` and manage the session.
+  `label` (optional) is used in notifications; defaults to `path`.
+  See |winter-sessions| for the full switching algorithm.
+
+==============================================================================
+SESSION BEHAVIOUR                                              *winter-sessions*
+
+By default, winter.nvim only LOADS existing sessions — it never creates them
+automatically. |winter.switch_to()| applies the following algorithm:
+
+1. If `create_sessions = true`: save the current session before leaving, but
+   only if a session file for the current cwd already exists (conservative —
+   never litters sessions for arbitrary directories).
+
+2. `:cd` into the target path using the configured `cd_command`. Paths with
+   spaces or special characters are handled safely via structured vim.cmd calls.
+
+3. If `use_sessions = true` and a session file for the target `path` exists and
+   is readable: `source` it to restore buffers, layout, etc.
+
+4. If no session file exists yet and `create_sessions = true`:
+   Create one with `mksession!` so future switches restore it.
+
+Session files are stored in `session_dir` with a deterministic filename:
+the absolute path with every non-alphanumeric character replaced by `_` and a
+`.vim` extension appended. (`_` is used instead of `%` or `#` because those
+are special in Vim Ex-command file arguments and break `:mksession`/`:source`.)
+
+Both `mksession!` and `source` are wrapped in `pcall`. On failure the plugin
+falls back gracefully to the plain `:cd` with a WARN notification — it never
+raises an error.
+
+  `use_sessions = false`    skip session loading; only `:cd`.
+  `create_sessions = true`  write sessions on switch so future visits restore
+                            your layout (off by default).
+
+==============================================================================
+PICKER KEYMAPS                                              *winter-picker-keys*
+
+Inside the worktrees picker:
+
+  `<c-s>`   Toggle git-status annotations (insert or normal mode).
+            When ON, re-fetches with `winter ws worktrees --json --status`
+            (slower, ~1s) and appends to each row:
+              +N  green   — N commits ahead of upstream
+              -N  yellow  — N commits behind upstream
+              [+N] red    — N uncommitted changes
+              =   dim     — clean, zero ahead/behind
+            The picker title changes to "Winter Worktrees (status)".
+            Press `<c-s>` again to return to the fast plain list.
 
 ==============================================================================
 HEALTH CHECK                                                      *winter-health*
@@ -138,21 +261,31 @@ Run the built-in health check to verify your setup: >
 
 The health check reports:
   - Whether snacks.nvim can be required
-  - Whether the `winter` CLI is executable on PATH (and its version if found)
+  - Whether the configured winter CLI is executable on PATH (and its version)
 
 ==============================================================================
 DEVELOPMENT                                                   *winter-development*
 
 Source layout: >
-  lua/winter/init.lua      -- public API: setup(), open()
-  lua/winter/config.lua    -- default config + validation
-  lua/winter/health.lua    -- :checkhealth winter
-  plugin/winter.lua        -- plugin file: guards, user commands
-  tests/                   -- test suite (mini.test)
+  lua/winter/init.lua        -- public API: setup(), worktrees(), switch_to()
+  lua/winter/config.lua      -- default config + validation
+  lua/winter/cli.lua         -- CLI invocation seam (build_argv, run)
+  lua/winter/workspace.lua   -- find_root() (pure root discovery)
+  lua/winter/worktrees.lua   -- worktrees picker feature module
+  lua/winter/session.lua     -- session_file() + switch_to() (pure helpers)
+  lua/winter/health.lua      -- :checkhealth winter
+  plugin/winter.lua          -- plugin file: guards, user commands
+  tests/                     -- test suite (mini.test)
 <
+
+Adding a new feature (e.g. dashboard):
+  1. Create lua/winter/dashboard.lua with M.open(cfg, opts?)
+  2. Add M.dashboard(opts?) in lua/winter/init.lua delegating to it
+  3. Add "dashboard" to the subcommands table in plugin/winter.lua
 
 Linting and formatting: >
   make lint    # stylua --check + luacheck
+  make fmt     # auto-format with stylua
   make test    # mini.test suite
 <
 

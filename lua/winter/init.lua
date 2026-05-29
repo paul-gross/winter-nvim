@@ -1,11 +1,17 @@
----@mod winter winter.nvim
+---@mod winter winter.nvim — Neovim integration for winter workspaces
 ---@brief [[
---- A Neovim plugin that surfaces a winter workspace's layout as a snacks.nvim
---- picker. Fuzzy-find any <env>/<repo> feature-environment worktree or
---- standalone repo and switch Neovim's working directory into it.
+--- winter.nvim provides rich editor integration with winter workspaces.
+--- The first integration is a snacks.nvim worktrees picker: fuzzy-find any
+--- `<env>/<repo>` feature-environment worktree or standalone repository and
+--- jump Neovim's working directory into it, restoring a saved session if one
+--- exists. More integrations (e.g. a dashboard) are planned.
+---
+--- Feature modules live under lua/winter/<feature>.lua. Adding a new feature
+--- (e.g. a dashboard) means adding lua/winter/dashboard.lua and a
+--- `M.dashboard(opts?)` entry point here — one line each.
 ---
 --- Requires:
----   - Neovim >= 0.9
+---   - Neovim >= 0.10
 ---   - folke/snacks.nvim
 ---   - winter CLI on PATH (https://github.com/paul-gross/winter)
 ---@brief ]]
@@ -26,8 +32,12 @@ M.config = vim.deepcopy(config_module.defaults)
 ---@param opts? Winter.Config
 ---@usage [[
 --- require("winter").setup({
+---   use_sessions = true,
+---   cd_command = "cd",
 ---   picker = { layout = "ivy" },
 ---   keymaps = { open = "<leader>fw" },
+---   -- Override global winter args (e.g. to run a dev CLI source tree):
+---   winter_args = { "--winter=/home/me/ws/alpha/winter" },
 --- })
 ---@usage ]]
 function M.setup(opts)
@@ -37,30 +47,45 @@ function M.setup(opts)
 
   if M.config.keymaps.open then
     vim.keymap.set("n", M.config.keymaps.open, function()
-      M.open()
-    end, { desc = "Winter: open workspace picker" })
+      M.worktrees()
+    end, { desc = "Winter: find workspace worktree" })
   end
 end
 
----Open the winter workspace picker.
+---Open the winter worktrees picker.
 ---
---- Shells out to `winter ws worktrees --json` to discover all
---- feature-environment worktrees and standalone repos, then presents them
---- in a snacks.nvim fuzzy picker. Selecting an entry changes Neovim's
---- working directory to that worktree root.
+--- Discovers the workspace root, fetches `winter [global_args] ws worktrees
+--- --json`, and opens a snacks.nvim fuzzy picker. Selecting an item calls
+--- `switch_to`.
 ---
---- NOTE: The picker implementation is not yet available in this release.
---- Watch https://github.com/paul-gross/winter-nvim for updates.
-function M.open()
-  -- TODO(feature): implement snacks.nvim picker over `winter ws worktrees --json`
-  --
-  -- Planned implementation outline:
-  --   1. Run: vim.system({ config.winter_cmd, "ws", "worktrees", "--json" }, ...)
-  --   2. Parse JSON output into a list of { env, repo, path } entries
-  --   3. Feed list to Snacks.picker() with a custom formatter and action that
-  --      calls vim.cmd.cd(entry.path)
-  --   4. Fall back gracefully when not inside a winter workspace (non-zero exit)
-  vim.notify("winter.nvim: picker not yet implemented", vim.log.levels.WARN)
+---@param opts? winter.worktrees.OpenOpts per-invocation overrides (e.g. winter_args)
+function M.worktrees(opts)
+  require("winter.worktrees").open(M.config, opts)
+end
+
+---Switch Neovim into `path`, loading an existing session or creating a new one.
+---
+--- This function is exposed on the public API so it can be called from scripts
+--- or other plugins without going through the picker.
+---
+---@param path string absolute path to the target worktree / repo
+---@param label? string human-readable label for notifications (defaults to path)
+function M.switch_to(path, label)
+  label = label or path
+  local session = require("winter.session")
+  session.switch_to(path, label, {
+    use_sessions = M.config.use_sessions,
+    create_sessions = M.config.create_sessions,
+    session_dir = M.config.session_dir,
+    cd_command = M.config.cd_command,
+  })
+end
+
+---@deprecated Use `worktrees()` instead.
+---Open the winter workspace picker (deprecated alias for `worktrees()`).
+---@param opts? winter.worktrees.OpenOpts
+function M.open(opts)
+  M.worktrees(opts)
 end
 
 return M
