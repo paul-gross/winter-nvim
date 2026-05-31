@@ -380,11 +380,16 @@ function M.open(cfg, opts)
       end
       -- Size the label column from the full result set before feeding items, so
       -- format_item (which reads this upvalue at render time) can pad to it and
-      -- the status indicators line up.
-      max_label_width = 0
-      for _, entry in ipairs(fetched) do
-        max_label_width = math.max(max_label_width, vim.api.nvim_strwidth(entry.label or ""))
-      end
+      -- the status indicators line up. nvim_strwidth is main-loop-only, but snacks
+      -- resumes this coroutine from a libuv fast-event context (its async executor
+      -- is a uv check handle), so hop to the main thread to measure widths.
+      max_label_width = ctx.async:schedule(function()
+        local width = 0
+        for _, entry in ipairs(fetched) do
+          width = math.max(width, vim.api.nvim_strwidth(entry.label or ""))
+        end
+        return width
+      end)
 
       for _, entry in ipairs(fetched) do
         cb(make_picker_item(entry))
