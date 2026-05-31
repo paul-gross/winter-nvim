@@ -5,6 +5,8 @@
 
 Neovim integration for [winter](https://github.com/paul-gross/winter) workspaces.
 
+📚 **Documentation:** <https://paul-gross.github.io/winter-docs/>
+
 This plugin provides rich editor integration with winter workspaces. The first integration is a [snacks.nvim](https://github.com/folke/snacks.nvim) **worktrees picker**: fuzzy-find any `<env>/<repo>` feature-environment worktree or standalone repository and jump Neovim's working directory into it, restoring a saved session if one exists. More integrations (e.g. a dashboard) are planned.
 
 <!-- Screenshot placeholder: add a GIF or PNG of the picker in action -->
