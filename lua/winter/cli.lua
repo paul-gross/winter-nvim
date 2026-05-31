@@ -8,9 +8,12 @@
 ---
 ---   argv = { winter_cmd, <global_args...>, <subcommand_args...> }
 ---
---- `build_argv` enforces this ordering. `run` calls `build_argv` internally.
+--- `build_argv` enforces this ordering. `run_async` calls `build_argv`
+--- internally.
 ---
---- `run` returns the raw `{ code, stdout, stderr }` result table. Callers are
+--- `run_async` is non-blocking: it invokes `vim.system(argv, …, on_exit)` and
+--- returns immediately, delivering the raw `{ code, stdout, stderr }` result
+--- table to its `on_done` callback. The UI thread is never blocked. Callers are
 --- responsible for JSON decoding so this module stays data-format–agnostic.
 ---@brief ]]
 
@@ -35,35 +38,47 @@ function M.build_argv(winter_cmd, global_args, subcommand_args)
   return argv
 end
 
----Run the winter CLI with the given args, returning the raw result.
+---Run the winter CLI asynchronously, delivering the raw result to `on_done`.
 ---
---- cwd is set to `root` (the workspace root). An optional `runner` function
---- can be injected for unit tests — it receives the argv table and cwd string
---- and must return a table with `code` (integer), `stdout` (string), and
---- `stderr` (string) fields. Defaults to a `vim.system(...):wait()` wrapper.
+--- cwd is set to `root` (the workspace root). The CLI is invoked via
+--- `vim.system(argv, opts, on_exit)`, which returns immediately and fires
+--- `on_exit` on completion — the UI thread is never blocked.
+---
+--- `on_done` is called with `(result, nil)` on success or `(nil, err)` on a
+--- non-zero exit, where result is a `{ code, stdout, stderr }` table. The
+--- callback runs in the libuv context where `vim.system` fires its `on_exit`;
+--- callers doing UI work must wrap it in `vim.schedule()`.
+---
+--- An optional callback-style `runner` can be injected for unit tests — it
+--- receives `(argv, cwd, on_exit)` and must invoke `on_exit` with a
+--- `{ code, stdout, stderr }` table. Tests invoke `on_exit` synchronously so the
+--- async wiring stays deterministically testable. Defaults to a
+--- `vim.system(argv, …, on_exit)` wrapper.
 ---
 ---@param root string workspace root directory (used as cwd)
 ---@param cfg Winter.Config plugin configuration (only winter_cmd is used here)
 ---@param global_args string[] global flags (see build_argv)
 ---@param subcommand_args string[] subcommand + its flags (see build_argv)
----@param runner? fun(argv: string[], cwd: string): {code: integer, stdout: string, stderr: string}
----@return {code: integer, stdout: string, stderr: string}|nil result, string|nil err
-function M.run(root, cfg, global_args, subcommand_args, runner)
+---@param on_done fun(result: {code: integer, stdout: string, stderr: string}|nil, err: string|nil)
+---@param runner? fun(argv: string[], cwd: string, on_exit: fun(result: {code: integer, stdout: string, stderr: string}))
+function M.run_async(root, cfg, global_args, subcommand_args, on_done, runner)
   local argv = M.build_argv(cfg.winter_cmd, global_args, subcommand_args)
 
-  local result
+  ---@param result {code: integer, stdout: string, stderr: string}
+  local function on_exit(result)
+    if result.code ~= 0 then
+      local stderr = vim.trim(result.stderr or "")
+      on_done(nil, ("winter CLI exited with code %d: %s"):format(result.code, stderr ~= "" and stderr or "(no output)"))
+      return
+    end
+    on_done(result, nil)
+  end
+
   if runner then
-    result = runner(argv, root)
+    runner(argv, root, on_exit)
   else
-    result = vim.system(argv, { cwd = root, text = true }):wait()
+    vim.system(argv, { cwd = root, text = true }, on_exit)
   end
-
-  if result.code ~= 0 then
-    local stderr = vim.trim(result.stderr or "")
-    return nil, ("winter CLI exited with code %d: %s"):format(result.code, stderr ~= "" and stderr or "(no output)")
-  end
-
-  return result, nil
 end
 
 return M

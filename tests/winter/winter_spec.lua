@@ -154,7 +154,11 @@ T["cli.build_argv with multiple global_args preserves order"] = function()
 end
 
 -- ---------------------------------------------------------------------------
--- cli.run with injected fake runner
+-- cli.run_async with injected callback-style fake runner
+--
+-- The injected runner receives (argv, cwd, on_exit) and drives on_exit
+-- synchronously with a fake result table, so the async wiring is exercised
+-- deterministically without spawning a real process.
 -- ---------------------------------------------------------------------------
 
 local sample_json = [[
@@ -164,15 +168,18 @@ local sample_json = [[
   ]
 ]]
 
-T["cli.run with fake runner returns raw result on success"] = function()
+T["cli.run_async with fake runner delivers raw result on success"] = function()
   local cli = require("winter.cli")
   local cfg = require("winter.config").defaults
 
-  local fake_runner = function(_argv, _cwd)
-    return { code = 0, stdout = sample_json, stderr = "" }
+  local fake_runner = function(_argv, _cwd, on_exit)
+    on_exit({ code = 0, stdout = sample_json, stderr = "" })
   end
 
-  local result, err = cli.run("/fake/root", cfg, {}, { "ws", "worktrees", "--json" }, fake_runner)
+  local result, err
+  cli.run_async("/fake/root", cfg, {}, { "ws", "worktrees", "--json" }, function(res, e)
+    result, err = res, e
+  end, fake_runner)
 
   MiniTest.expect.equality(err, nil)
   MiniTest.expect.equality(type(result), "table")
@@ -186,15 +193,18 @@ T["cli.run with fake runner returns raw result on success"] = function()
   MiniTest.expect.equality(decoded[2].label, "winter-harness")
 end
 
-T["cli.run with fake runner returns nil + error on non-zero exit"] = function()
+T["cli.run_async with fake runner delivers nil + error on non-zero exit"] = function()
   local cli = require("winter.cli")
   local cfg = require("winter.config").defaults
 
-  local fake_runner = function(_argv, _cwd)
-    return { code = 1, stdout = "", stderr = "some CLI error" }
+  local fake_runner = function(_argv, _cwd, on_exit)
+    on_exit({ code = 1, stdout = "", stderr = "some CLI error" })
   end
 
-  local result, err = cli.run("/fake/root", cfg, {}, { "ws", "worktrees", "--json" }, fake_runner)
+  local result, err
+  cli.run_async("/fake/root", cfg, {}, { "ws", "worktrees", "--json" }, function(res, e)
+    result, err = res, e
+  end, fake_runner)
 
   MiniTest.expect.equality(result, nil)
   MiniTest.expect.equality(type(err), "string")
@@ -202,17 +212,24 @@ T["cli.run with fake runner returns nil + error on non-zero exit"] = function()
   MiniTest.expect.equality(err:find("some CLI error") ~= nil, true)
 end
 
-T["cli.run passes global_args before subcommand_args to runner"] = function()
+T["cli.run_async passes global_args before subcommand_args to runner"] = function()
   local cli = require("winter.cli")
   local cfg = require("winter.config").defaults
 
   local captured_argv = nil
-  local fake_runner = function(argv, _cwd)
+  local fake_runner = function(argv, _cwd, on_exit)
     captured_argv = argv
-    return { code = 0, stdout = "[]", stderr = "" }
+    on_exit({ code = 0, stdout = "[]", stderr = "" })
   end
 
-  cli.run("/fake/root", cfg, { "--winter=/some/path" }, { "ws", "worktrees", "--json" }, fake_runner)
+  cli.run_async(
+    "/fake/root",
+    cfg,
+    { "--winter=/some/path" },
+    { "ws", "worktrees", "--json" },
+    function() end,
+    fake_runner
+  )
 
   MiniTest.expect.equality(type(captured_argv), "table")
   MiniTest.expect.equality(captured_argv[1], "winter")
@@ -237,7 +254,7 @@ T["worktrees.build_subcommand with status includes --status"] = function()
 end
 
 -- ---------------------------------------------------------------------------
--- worktrees.fetch — JSON parsing with and without status fields
+-- worktrees.parse_items — pure JSON parsing with and without status fields
 -- ---------------------------------------------------------------------------
 
 local sample_with_status = [[
@@ -254,15 +271,10 @@ local sample_without_status = [[
   ]
 ]]
 
-T["worktrees.fetch parses items with status fields (ahead/behind/dirty)"] = function()
+T["worktrees.parse_items parses items with status fields (ahead/behind/dirty)"] = function()
   local worktrees = require("winter.worktrees")
-  local cfg = require("winter.config").defaults
 
-  local fake_runner = function(_argv, _cwd)
-    return { code = 0, stdout = sample_with_status, stderr = "" }
-  end
-
-  local items, err = worktrees.fetch("/fake/root", cfg, {}, true, fake_runner)
+  local items, err = worktrees.parse_items(sample_with_status)
 
   MiniTest.expect.equality(err, nil)
   MiniTest.expect.equality(type(items), "table")
@@ -281,15 +293,10 @@ T["worktrees.fetch parses items with status fields (ahead/behind/dirty)"] = func
   MiniTest.expect.equality(second.dirty, 0)
 end
 
-T["worktrees.fetch parses items without status fields (fields are nil)"] = function()
+T["worktrees.parse_items parses items without status fields (fields are nil)"] = function()
   local worktrees = require("winter.worktrees")
-  local cfg = require("winter.config").defaults
 
-  local fake_runner = function(_argv, _cwd)
-    return { code = 0, stdout = sample_without_status, stderr = "" }
-  end
-
-  local items, err = worktrees.fetch("/fake/root", cfg, {}, false, fake_runner)
+  local items, err = worktrees.parse_items(sample_without_status)
 
   MiniTest.expect.equality(err, nil)
   MiniTest.expect.equality(type(items), "table")
@@ -308,15 +315,52 @@ T["worktrees.fetch parses items without status fields (fields are nil)"] = funct
   MiniTest.expect.equality(second.dirty, nil)
 end
 
-T["worktrees.fetch returns nil + err on CLI failure"] = function()
+T["worktrees.parse_items returns nil + err on empty output"] = function()
+  local worktrees = require("winter.worktrees")
+
+  local items, err = worktrees.parse_items("   ")
+
+  MiniTest.expect.equality(items, nil)
+  MiniTest.expect.equality(type(err), "string")
+  MiniTest.expect.equality(err:find("empty") ~= nil, true)
+end
+
+-- ---------------------------------------------------------------------------
+-- worktrees.fetch_async — async fetch driven by a synchronous fake runner
+-- ---------------------------------------------------------------------------
+
+T["worktrees.fetch_async delivers parsed items via callback"] = function()
   local worktrees = require("winter.worktrees")
   local cfg = require("winter.config").defaults
 
-  local fake_runner = function(_argv, _cwd)
-    return { code = 1, stdout = "", stderr = "status error" }
+  local fake_runner = function(_argv, _cwd, on_exit)
+    on_exit({ code = 0, stdout = sample_with_status, stderr = "" })
   end
 
-  local items, err = worktrees.fetch("/fake/root", cfg, {}, true, fake_runner)
+  local items, err
+  worktrees.fetch_async("/fake/root", cfg, {}, true, function(its, e)
+    items, err = its, e
+  end, fake_runner)
+
+  MiniTest.expect.equality(err, nil)
+  MiniTest.expect.equality(type(items), "table")
+  MiniTest.expect.equality(#items, 2)
+  MiniTest.expect.equality(items[1].label, "alpha/winter")
+  MiniTest.expect.equality(items[1].behind, 3)
+end
+
+T["worktrees.fetch_async delivers nil + err on CLI failure"] = function()
+  local worktrees = require("winter.worktrees")
+  local cfg = require("winter.config").defaults
+
+  local fake_runner = function(_argv, _cwd, on_exit)
+    on_exit({ code = 1, stdout = "", stderr = "status error" })
+  end
+
+  local items, err
+  worktrees.fetch_async("/fake/root", cfg, {}, true, function(its, e)
+    items, err = its, e
+  end, fake_runner)
 
   MiniTest.expect.equality(items, nil)
   MiniTest.expect.equality(type(err), "string")
@@ -331,10 +375,7 @@ T[":Winter command is registered after plugin file runs"] = function()
   -- Source the plugin file (guards against double-load)
   -- Reset the guard so we can source it in isolation
   vim.g.loaded_winter = nil
-  local plugin_path = vim.fn.fnamemodify(
-    debug.getinfo(1, "S").source:sub(2),
-    ":p:h:h:h"
-  ) .. "/plugin/winter.lua"
+  local plugin_path = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h:h") .. "/plugin/winter.lua"
   vim.cmd("source " .. plugin_path)
 
   local cmds = vim.api.nvim_get_commands({})
@@ -406,7 +447,7 @@ end
 T["cli JSON parsing: two-element payload has correct shape"] = function()
   -- We exercise the JSON-parsing branch by decoding the canonical sample
   -- payload from the spec and checking the shapes that the worktrees feature
-  -- would receive after cli.run returns raw stdout.
+  -- would receive after cli.run_async delivers raw stdout.
   local sample = vim.json.decode([[
     [
       {"kind":"worktree","env":"alpha","repo":"winter","name":null,"label":"alpha/winter","path":"/ws/alpha/winter"},

@@ -186,9 +186,11 @@ LUA API                                                            *winter-api*
 
                                                           *winter.worktrees()*
 `require("winter").worktrees({opts})`
-  Discover the workspace root, fetch `winter [global_args] ws worktrees
-  --json`, and open the snacks.nvim picker. Selecting an entry calls
-  |winter.switch_to()|.
+  Discover the workspace root, then open the snacks.nvim picker. The picker is
+  driven by a native async finder: it opens immediately with a loading
+  indicator and fetches `winter [global_args] ws worktrees --json` off the UI
+  thread (via `vim.system(…, on_exit)`), populating when the CLI returns — the
+  editor is never frozen. Selecting an entry calls |winter.switch_to()|.
 
   `opts` is an optional table:
     `winter_args` (string[]) — override `config.winter_args` for this call only.
@@ -250,6 +252,9 @@ Inside the worktrees picker:
               =   dim     — clean, zero ahead/behind
             The picker title changes to "Winter Worktrees (status)".
             Press `<c-s>` again to return to the fast plain list.
+            The re-fetch is asynchronous: the picker stays interactive with a
+            loading indicator while it runs, and a rapid double `<c-s>` cannot
+            render a stale result.
 
 ==============================================================================
 HEALTH CHECK                                                      *winter-health*

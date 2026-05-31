@@ -13,7 +13,9 @@
 ---   -N (yellow)   — N commits behind upstream
 ---   [+N] (red)    — N uncommitted changes (dirty)
 ---   = (dim)       — clean, zero ahead/behind
---- This costs an extra `winter ws worktrees --json --status` call (~1s).
+--- This costs an extra `winter ws worktrees --json --status` call (~1s), but
+--- it runs asynchronously via a native snacks finder so the picker stays
+--- interactive (with a loading indicator) while the status fetch is in flight.
 ---@brief ]]
 
 local M = {}
@@ -44,24 +46,17 @@ function M.build_subcommand(show_status)
   return args
 end
 
----Fetch and parse worktree items from the winter CLI.
+---Parse the JSON stdout of `winter ws worktrees --json [--status]` into a
+---WorktreeItem list.
 ---
----@param root string workspace root
----@param cfg Winter.Config plugin configuration
----@param effective_global_args string[] global args (possibly overridden per-invocation)
----@param show_status boolean whether to request status fields
----@param runner? fun(argv: string[], cwd: string): {code: integer, stdout: string, stderr: string}
+--- Pure and synchronously testable: no CLI, no UI, no side effects. The async
+--- fetch path and any future sync caller share this helper so JSON shape
+--- handling lives in exactly one place.
+---
+---@param stdout string raw CLI stdout
 ---@return winter.WorktreeItem[]|nil items, string|nil err
-function M.fetch(root, cfg, effective_global_args, show_status, runner)
-  local cli = require("winter.cli")
-  local subcommand_args = M.build_subcommand(show_status)
-
-  local result, err = cli.run(root, cfg, effective_global_args, subcommand_args, runner)
-  if not result then
-    return nil, err
-  end
-
-  local stdout = vim.trim(result.stdout or "")
+function M.parse_items(stdout)
+  stdout = vim.trim(stdout or "")
   if stdout == "" then
     return nil, "winter CLI returned empty output"
   end
@@ -97,6 +92,37 @@ function M.fetch(root, cfg, effective_global_args, show_status, runner)
   end
 
   return items, nil
+end
+
+---Asynchronously fetch and parse worktree items from the winter CLI.
+---
+--- Delegates the CLI round-trip to the non-blocking `cli.run_async`, then parses
+--- the raw stdout with the pure `parse_items` helper. `on_done` receives
+--- `(items, nil)` on success or `(nil, err)` on CLI / parse failure. It runs in
+--- the libuv context where `vim.system` fires `on_exit`; callers doing UI work
+--- must wrap it in `vim.schedule()`.
+---
+--- The optional callback-style `runner` is forwarded to `cli.run_async` for
+--- tests (see its docstring).
+---
+---@param root string workspace root
+---@param cfg Winter.Config plugin configuration
+---@param effective_global_args string[] global args (possibly overridden per-invocation)
+---@param show_status boolean whether to request status fields
+---@param on_done fun(items: winter.WorktreeItem[]|nil, err: string|nil)
+---@param runner? fun(argv: string[], cwd: string, on_exit: fun(result: {code: integer, stdout: string, stderr: string}))
+function M.fetch_async(root, cfg, effective_global_args, show_status, on_done, runner)
+  local cli = require("winter.cli")
+  local subcommand_args = M.build_subcommand(show_status)
+
+  cli.run_async(root, cfg, effective_global_args, subcommand_args, function(result, err)
+    if not result then
+      on_done(nil, err)
+      return
+    end
+    local items, parse_err = M.parse_items(result.stdout)
+    on_done(items, parse_err)
+  end, runner)
 end
 
 ---Open the winter worktrees picker.
@@ -152,114 +178,233 @@ function M.open(cfg, opts)
     return
   end
 
-  -- -------------------------------------------------------------------------
-  -- Data fetch (initial, no status)
-  -- -------------------------------------------------------------------------
   local effective_global_args = opts.winter_args or cfg.winter_args or {}
-
-  local items, fetch_err = M.fetch(root, cfg, effective_global_args, false)
-  if not items then
-    vim.notify(("winter.nvim: %s"):format(fetch_err), vim.log.levels.ERROR)
-    return
-  end
-
-  if #items == 0 then
-    vim.notify("winter.nvim: no winter repos found", vim.log.levels.WARN)
-    return
-  end
 
   -- -------------------------------------------------------------------------
   -- Status-mode toggle state (per-picker)
   -- -------------------------------------------------------------------------
   -- show_status tracks whether the picker is currently showing git-status
-  -- annotations. It starts false (fast path). The <c-s> action flips it,
-  -- re-fetches with/without --status, and rebuilds the item list.
+  -- annotations. It starts false (fast path). The <c-s> action flips it and
+  -- re-runs the finder; the finder reads show_status at run time, so the same
+  -- finder serves both modes.
   local show_status = false
 
   -- -------------------------------------------------------------------------
-  -- Helper: build snacks picker items from WorktreeItem list
+  -- Helper: build a single snacks picker item from a WorktreeItem
   -- -------------------------------------------------------------------------
-  ---@param worktree_items winter.WorktreeItem[]
-  ---@return snacks.picker.finder.Item[]
-  local function make_picker_items(worktree_items)
-    local result = {}
-    for _, entry in ipairs(worktree_items) do
-      result[#result + 1] = {
-        text = entry.label,
-        -- Carry the full record through so confirm and format can act on it.
-        winter_label = entry.label,
-        winter_path = entry.path,
-        winter_kind = entry.kind,
-        winter_ahead = entry.ahead,
-        winter_behind = entry.behind,
-        winter_dirty = entry.dirty,
-      }
-    end
-    return result
+  ---@param entry winter.WorktreeItem
+  ---@return snacks.picker.finder.Item
+  local function make_picker_item(entry)
+    return {
+      text = entry.label,
+      -- Carry the full record through so confirm and format can act on it.
+      winter_label = entry.label,
+      winter_path = entry.path,
+      winter_kind = entry.kind,
+      winter_ahead = entry.ahead,
+      winter_behind = entry.behind,
+      winter_dirty = entry.dirty,
+    }
   end
 
   -- -------------------------------------------------------------------------
-  -- Format function: show the label prominently, dim the path as a hint.
-  -- When status is loaded (ahead/behind/dirty present), append colored segments.
-  --
-  -- Highlight group choices:
-  --   ahead  (+N, green)   : "DiagnosticOk"         — always available, maps to green
-  --   behind (-N, yellow)  : "DiagnosticWarn"        — always available, maps to yellow
-  --   dirty  ([+N], red)   : "DiagnosticError"       — always available, maps to red
-  --   clean  (=, dim)      : "SnacksPickerDimmed"    — already used for path hint
-  -- DiagnosticOk/Warn/Error are standard Neovim groups guaranteed present since
-  -- Neovim 0.9. SnacksPickerGitAdded/Modified/Deleted would be more semantic
-  -- but may not exist in all snacks versions; Diagnostic* are unconditionally safe.
+  -- Columnar formatting: label · status, laid out as two columns so rows line
+  -- up like a table. The label is padded to the widest label (computed per fetch
+  -- by the finder and held in this upvalue) so the status indicators all start
+  -- at the same x instead of trailing each variable-length label. The absolute
+  -- path is intentionally not shown — the label already identifies the worktree,
+  -- and the path is just noise.
   -- -------------------------------------------------------------------------
+  local max_label_width = 0
+
+  ---Pad `text` with trailing spaces to `width` display columns (no-op if wider).
+  ---@param text string
+  ---@param width integer
+  ---@return string
+  local function pad_right(text, width)
+    local tw = vim.api.nvim_strwidth(text)
+    return tw < width and (text .. (" "):rep(width - tw)) or text
+  end
+
+  -- Build the colored git-status segments for one item. Returns {} when status
+  -- has not been loaded (the fast, no-`--status` mode).
+  --
+  -- Highlight groups: ahead "+N" → DiagnosticOk (green), behind "-N" →
+  -- DiagnosticWarn (yellow), dirty "[+N]" → DiagnosticError (red), clean "=" →
+  -- SnacksPickerDimmed. Diagnostic* are standard since Neovim 0.9 so they are
+  -- unconditionally safe (SnacksPickerGit* would be more semantic but may be
+  -- absent in some snacks versions).
+  ---@param ahead integer|nil
+  ---@param behind integer|nil
+  ---@param dirty integer|nil
+  ---@return snacks.picker.Highlight[] segments
+  local function status_segments(ahead, behind, dirty)
+    if ahead == nil and behind == nil and dirty == nil then
+      return {}
+    end
+    local parts = {} ---@type snacks.picker.Highlight[]
+    if (ahead and ahead > 0) or (behind and behind > 0) or (dirty and dirty > 0) then
+      if ahead and ahead > 0 then
+        parts[#parts + 1] = { ("+%d"):format(ahead), "DiagnosticOk" }
+      end
+      if behind and behind > 0 then
+        parts[#parts + 1] = { ("-%d"):format(behind), "DiagnosticWarn" }
+      end
+      if dirty and dirty > 0 then
+        parts[#parts + 1] = { ("[+%d]"):format(dirty), "DiagnosticError" }
+      end
+    else
+      parts[#parts + 1] = { "=", "SnacksPickerDimmed" }
+    end
+    -- Join parts with single spaces.
+    local segments = {} ---@type snacks.picker.Highlight[]
+    for i, part in ipairs(parts) do
+      if i > 1 then
+        segments[#segments + 1] = { " " }
+      end
+      segments[#segments + 1] = part
+    end
+    return segments
+  end
+
   ---@param item snacks.picker.Item
   ---@param _picker snacks.Picker
   ---@return snacks.picker.Highlight[]
   local function format_item(item, _picker)
     ---@type snacks.picker.Highlight[]
     local ret = {}
-    ret[#ret + 1] = { item.winter_label or item.text, "SnacksPickerFile" }
 
-    -- Status annotation segments (only when status has been loaded).
-    local ahead = item.winter_ahead
-    local behind = item.winter_behind
-    local dirty = item.winter_dirty
+    local segments = status_segments(item.winter_ahead, item.winter_behind, item.winter_dirty)
 
-    if ahead ~= nil or behind ~= nil or dirty ~= nil then
-      -- At least one status field present — render annotation.
-      local has_any = (ahead and ahead > 0) or (behind and behind > 0) or (dirty and dirty > 0)
-      if has_any then
-        if ahead and ahead > 0 then
-          ret[#ret + 1] = { ("  +%d"):format(ahead), "DiagnosticOk" }
-        end
-        if behind and behind > 0 then
-          ret[#ret + 1] = { ("  -%d"):format(behind), "DiagnosticWarn" }
-        end
-        if dirty and dirty > 0 then
-          ret[#ret + 1] = { ("  [+%d]"):format(dirty), "DiagnosticError" }
-        end
-      else
-        -- Clean: zero ahead, zero behind, zero dirty.
-        ret[#ret + 1] = { "  =", "SnacksPickerDimmed" }
+    -- Column 1: label. Pad to the widest label only when a status column
+    -- follows, so the status indicators align; otherwise show the bare label.
+    local label = item.winter_label or item.text or ""
+    ret[#ret + 1] = { #segments > 0 and pad_right(label, max_label_width) or label, "SnacksPickerFile" }
+
+    -- Column 2: git-status indicators (only present once status is loaded).
+    if #segments > 0 then
+      ret[#ret + 1] = { "  " }
+      for _, seg in ipairs(segments) do
+        ret[#ret + 1] = seg
       end
     end
 
-    -- Dim path hint (always shown, after status).
-    local path_hint = ("  %s"):format(item.winter_path or "")
-    ret[#ret + 1] = { path_hint, "SnacksPickerDimmed" }
     return ret
   end
 
   local session = require("winter.session")
 
-  -- Picker opts are built once; the items list is replaced on toggle.
-  local picker_ref = nil
+  -- -------------------------------------------------------------------------
+  -- Native async snacks finder
+  -- -------------------------------------------------------------------------
+  -- Instead of a static `items` array, the picker is driven by a finder
+  -- function that runs the winter CLI off the UI thread and feeds items to the
+  -- picker via snacks' callback contract. The picker window opens immediately
+  -- with a loading indicator and populates when the CLI returns — the editor is
+  -- never frozen.
+  --
+  -- The finder runs inside a snacks coroutine (`ctx.async`). We launch the CLI
+  -- via the callback-based `fetch_async`, then suspend the coroutine until the
+  -- CLI's `on_exit` resumes it. Delegating to snacks gives us three behaviours
+  -- for free, rather than reimplementing them:
+  --   * cancellation when the picker closes (snacks aborts the coroutine at the
+  --     suspend point, so nothing below runs — no operations on a closed picker);
+  --   * stale-result suppression on re-run: the <c-s> toggle calls
+  --     `picker:find()`, which aborts any in-flight finder before starting a new
+  --     one, so a rapid double <c-s> cannot render an out-of-date result.
+  --
+  -- For loading feedback, snacks renders a spinner + count in the input line
+  -- while the finder is active. We additionally surface a "— loading…" suffix in
+  -- the picker title (see set_title), since the `--status` re-fetch does ~1s of
+  -- git work and the input-line spinner alone is easy to miss.
+
+  -- Set the picker's displayed title. snacks renders `picker.title` (captured
+  -- once at construction), NOT `picker.opts.title`, so we mutate that field and
+  -- call update_titles(). Touches windows, so callers schedule onto the main loop.
+  ---@param picker snacks.Picker
+  ---@param status boolean whether status-mode is active
+  ---@param loading boolean whether a CLI fetch is in flight
+  local function set_title(picker, status, loading)
+    if picker.closed then
+      return
+    end
+    local base = status and "Winter Worktrees (status)" or "Winter Worktrees"
+    picker.title = loading and (base .. " — loading…") or base
+    picker:update_titles()
+  end
+
+  ---@param _finder_opts snacks.picker.Config
+  ---@param ctx snacks.picker.finder.ctx
+  local function finder(_finder_opts, ctx)
+    -- Read the toggle state at run time so the same finder serves both modes.
+    local current_status = show_status
+    ---@param cb async fun(item: snacks.picker.finder.Item)
+    return function(cb)
+      -- Announce the in-flight fetch in the title. snacks defers all window
+      -- rendering off the finder coroutine, so schedule onto the main loop.
+      vim.schedule(function()
+        set_title(ctx.picker, current_status, true)
+      end)
+
+      local fetched, fetch_err
+      M.fetch_async(root, cfg, effective_global_args, current_status, function(items, err)
+        fetched, fetch_err = items, err
+        -- on_exit fires in a libuv fast-event context; hop to the main loop
+        -- before resuming the snacks coroutine.
+        vim.schedule(function()
+          ctx.async:resume()
+        end)
+      end)
+      -- Suspend until the CLI callback resumes us. If the picker closes or
+      -- re-runs the finder while the fetch is in flight, snacks aborts this
+      -- coroutine here and the code below never executes (so the title is left
+      -- for the new finder / close path to manage).
+      ctx.async:suspend()
+
+      -- Fetch complete: clear the loading suffix from the title.
+      vim.schedule(function()
+        set_title(ctx.picker, current_status, false)
+      end)
+
+      if fetch_err then
+        vim.schedule(function()
+          vim.notify(("winter.nvim: %s"):format(fetch_err), vim.log.levels.ERROR)
+        end)
+        return
+      end
+      if not fetched or #fetched == 0 then
+        vim.schedule(function()
+          vim.notify("winter.nvim: no winter repos found", vim.log.levels.WARN)
+        end)
+        return
+      end
+      -- Size the label column from the full result set before feeding items, so
+      -- format_item (which reads this upvalue at render time) can pad to it and
+      -- the status indicators line up.
+      max_label_width = 0
+      for _, entry in ipairs(fetched) do
+        max_label_width = math.max(max_label_width, vim.api.nvim_strwidth(entry.label or ""))
+      end
+
+      for _, entry in ipairs(fetched) do
+        cb(make_picker_item(entry))
+      end
+    end
+  end
 
   local picker_opts = {
     title = "Winter Worktrees",
-    items = make_picker_items(items),
+    finder = finder,
     format = format_item,
     -- Disable the built-in preview — we have no file to preview.
     preview = "none",
+    -- Show the picker window immediately rather than waiting for results.
+    -- snacks defaults `show_delay` to 5000ms: while a finder is running with no
+    -- results yet, it withholds the window for up to that long — which, with our
+    -- async CLI finder, means the picker would not appear until the CLI returns
+    -- (~1s), defeating the point of the async refactor. With 0 the window opens
+    -- right away in a loading state and fills in when the finder yields items.
+    show_delay = 0,
     confirm = function(picker, item)
       picker:close()
       if item then
@@ -278,19 +423,9 @@ function M.open(cfg, opts)
     actions = {
       winter_toggle_status = function(picker)
         show_status = not show_status
-        -- Re-fetch with or without --status.
-        local new_items, ref_err = M.fetch(root, cfg, effective_global_args, show_status)
-        if not new_items then
-          vim.notify(("winter.nvim: status fetch failed: %s"):format(ref_err), vim.log.levels.WARN)
-          show_status = not show_status -- revert
-          return
-        end
-        -- Update picker title to hint at the current mode.
-        local new_title = show_status and "Winter Worktrees (status)" or "Winter Worktrees"
-        -- Rebuild items and refresh.
-        picker.opts.title = new_title
-        picker.opts.items = make_picker_items(new_items)
-        -- Snacks picker exposes a refresh method; call it to re-render.
+        -- Re-run the finder with the new mode. The finder reads show_status,
+        -- drives the title (loading suffix + mode), and snacks aborts any
+        -- in-flight fetch first so a rapid double <c-s> can't render a stale result.
         picker:find()
       end,
     },
@@ -309,7 +444,7 @@ function M.open(cfg, opts)
   end
 
   -- Use Snacks.picker.pick() — the canonical entry point for custom pickers.
-  picker_ref = Snacks.picker.pick(picker_opts)
+  Snacks.picker.pick(picker_opts)
 end
 
 return M

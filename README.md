@@ -188,12 +188,21 @@ JSON array; each element has these keys: `kind` (`"worktree"` or
 (e.g. `"alpha/winter"` or `"winter-harness"`) is what the fuzzy matcher
 operates on.
 
+The CLI call is **asynchronous**: the picker is driven by a native snacks
+finder that runs `winter` via `vim.system(…, on_exit)` off the UI thread. The
+picker window opens immediately with a loading indicator and populates when the
+CLI returns — Neovim is never frozen while the call is in flight. snacks also
+cancels the in-flight call if the picker is closed before it returns.
+
 ### Git-status annotations
 
 Press `<c-s>` inside the picker to toggle git-status annotations. When ON, the
 picker re-fetches with `winter [global-args] ws worktrees --json --status` (a
 slower call that queries each repo's git state) and appends colored indicators
-to each row:
+to each row. The re-fetch is async too: the picker stays interactive with a
+loading indicator while it runs, and a rapid double `<c-s>` cannot render a
+stale result (the toggle re-runs the finder, and snacks aborts any in-flight
+fetch first).
 
 | Symbol | Color | Meaning |
 |---|---|---|
@@ -279,9 +288,11 @@ Tests are written with [mini.test](https://github.com/echasnovski/mini.nvim/blob
 The test suite covers:
 - `setup()` config merging and default preservation
 - `cli.build_argv()` — argument ordering (global args before subcommand)
-- `cli.run()` — injected fake runner (no real process needed)
+- `cli.run_async()` — injected callback-style fake runner driven synchronously
+  (no real process needed)
+- `worktrees.parse_items()` — pure JSON parsing, with and without status fields
+- `worktrees.fetch_async()` — async fetch wired through the fake runner
 - `workspace.find_root()` — directory walking with a tmp filesystem fixture
-- JSON parsing shape validation
 - `session.session_file()` — deterministic slugification
 - `worktrees()` — clean notification when outside a workspace
 

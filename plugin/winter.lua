@@ -4,12 +4,9 @@ if vim.g.loaded_winter then
 end
 vim.g.loaded_winter = true
 
--- Require Neovim 0.10+ (vim.system, used in cli.run, requires 0.10)
+-- Require Neovim 0.10+ (vim.system, used in cli.run_async, requires 0.10)
 if vim.fn.has("nvim-0.10") == 0 then
-  vim.notify(
-    "winter.nvim requires Neovim >= 0.10. Please upgrade your Neovim installation.",
-    vim.log.levels.ERROR
-  )
+  vim.notify("winter.nvim requires Neovim >= 0.10. Please upgrade your Neovim installation.", vim.log.levels.ERROR)
   return
 end
 
