@@ -39,10 +39,7 @@ local STATE = "winter_diff"
 local function load_delta()
   local ok, delta = pcall(require, "delta")
   if not ok then
-    vim.notify(
-      "winter.diff: delta.lua not found. Install kokusenz/delta.lua to use :WinterDiff.",
-      vim.log.levels.ERROR
-    )
+    vim.notify("winter.diff: delta.lua not found. Install kokusenz/delta.lua to use :WinterDiff.", vim.log.levels.ERROR)
     return nil
   end
   return delta
@@ -431,10 +428,7 @@ function M.open(cfg, opts)
   -- and require("winter").diff{} all honour cfg.diff.mode identically.
   local mode = opts.mode or (cfg.diff and cfg.diff.mode) or "branch"
   if not VALID_MODES[mode] then
-    vim.notify(
-      ("winter.diff: invalid mode %q (use branch|uncommitted|staged)"):format(mode),
-      vim.log.levels.ERROR
-    )
+    vim.notify(("winter.diff: invalid mode %q (use branch|uncommitted|staged)"):format(mode), vim.log.levels.ERROR)
     return
   end
 

@@ -99,10 +99,7 @@ function M.switch_to(path, label, opts)
       vim.cmd.source({ sf })
     end)
     if not ok then
-      vim.notify(
-        ("winter.nvim: session load failed for %s (%s)"):format(label, tostring(err)),
-        vim.log.levels.WARN
-      )
+      vim.notify(("winter.nvim: session load failed for %s (%s)"):format(label, tostring(err)), vim.log.levels.WARN)
     end
     return
   end
@@ -113,10 +110,7 @@ function M.switch_to(path, label, opts)
       vim.cmd.mksession({ sf, bang = true })
     end)
     if not ok then
-      vim.notify(
-        ("winter.nvim: session save failed for %s (%s)"):format(label, tostring(err)),
-        vim.log.levels.WARN
-      )
+      vim.notify(("winter.nvim: session save failed for %s (%s)"):format(label, tostring(err)), vim.log.levels.WARN)
     end
   end
 end

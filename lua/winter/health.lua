@@ -16,7 +16,7 @@ function M.check()
   -- Resolve the configured winter_cmd, falling back to the default if setup()
   -- has not been called yet.
   local config_module = require("winter.config")
-  local winter_cmd = "winter"
+  local winter_cmd
   local ok_cfg, winter = pcall(require, "winter")
   if ok_cfg and winter.config and type(winter.config.winter_cmd) == "string" then
     winter_cmd = winter.config.winter_cmd

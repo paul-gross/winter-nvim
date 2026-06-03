@@ -71,10 +71,7 @@ function M.validate(opts)
     if opts.diff.mode ~= nil then
       local valid = { branch = true, uncommitted = true, staged = true }
       if not valid[opts.diff.mode] then
-        error(
-          ("winter.nvim: diff.mode must be one of branch|uncommitted|staged, got %q"):format(opts.diff.mode),
-          2
-        )
+        error(("winter.nvim: diff.mode must be one of branch|uncommitted|staged, got %q"):format(opts.diff.mode), 2)
       end
     end
   end
