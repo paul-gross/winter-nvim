@@ -161,10 +161,8 @@ require("winter").switch_to("/abs/path/to/worktree", "alpha/winter")
 When the picker is opened, the plugin walks up the directory tree starting from
 the current buffer's file directory (falling back to `cwd` if the buffer has no
 associated file). The workspace root is the first ancestor directory that
-contains **both**:
-
-- `.winter/config.toml` — a readable file
-- `tools/winter-cli/` — a directory
+contains a `.winter/` directory. This matches the winter CLI's own root
+convention, so the plugin recognises every winter workspace.
 
 If no such ancestor is found, the plugin emits a clean message and returns
 without opening a picker:

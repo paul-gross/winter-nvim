@@ -15,14 +15,30 @@
 --- bind buffer-local keys without the plugin imposing any.
 ---
 ---   :WinterDiff[!] [env]      open (! = uncommitted working tree, else --branch)
----   :WinterDiffNextHunk       cursor → next hunk      (also M.next_hunk)
----   :WinterDiffPrevHunk       cursor → prev hunk      (also M.prev_hunk)
----   :WinterDiffNextFile       cursor → next file      (also M.next_file)
----   :WinterDiffPrevFile       cursor → prev file      (also M.prev_file)
----   :WinterDiffClose          close diff + its loclist (also M.close)
+---   :WinterDiffNextHunk       cursor → next hunk       (also M.next_hunk)
+---   :WinterDiffPrevHunk       cursor → prev hunk       (also M.prev_hunk)
+---   :WinterDiffNextFile       cursor → next file       (also M.next_file)
+---   :WinterDiffPrevFile       cursor → prev file       (also M.prev_file)
+---   :WinterDiffDrawer         open the loclist file drawer (also M.drawer)
+---   :WinterDiffRefresh        re-run the diff in place  (also M.refresh)
+---   :WinterDiffGotoFile       open the real source file (also M.goto_file)
+---   :WinterDiffGotoFileSplit  …in a split               (M.goto_file("split"))
+---   :WinterDiffGotoFileVSplit …in a vsplit              (M.goto_file("vsplit"))
+---   :WinterDiffGotoFileTab    …in a new tab             (M.goto_file("tabedit"))
+---   :WinterDiffClose          close diff + its loclist  (also M.close)
 ---   :WinterDiffYank           yank selection as Claude context (also M.yank)
 ---
---- Requires `kokusenz/delta.lua` on the runtimepath.
+--- The diff replaces the buffer in the CURRENT window (it is just a buffer — no
+--- tab, drawer, or side-by-side layout is forced). Open a tab/split yourself
+--- first if you want one.
+---
+--- Requires `kokusenz/delta.lua` on the runtimepath. The navigation/yank helpers
+--- read delta.lua's buffer metadata (`b:delta_artifacts`, `b:delta_diff_data_set`,
+--- `b:delta_line_map`) and field names (`row_number`, `formatted_diff_line_num`,
+--- `line_type`, line-map `new`/`old`) directly, so they are coupled to delta.lua's
+--- internal schema. Verified against kokusenz/delta.lua as of 2026-06; a delta
+--- bump that renames these makes navigation degrade to a no-op (readers fall back
+--- to empty), not error.
 ---@brief ]]
 
 local cli = require("winter.cli")
@@ -62,20 +78,33 @@ function M.diff_args(env, mode)
   return args
 end
 
+---Collect the file-title artifacts for a diff buffer: delta.lua `title`
+---artifacts, excluding the "Line N" multi-hunk sub-headers. Returns 1-based
+---buffer rows paired with the repo-prefixed path each title carries. The single
+---place that knows how a file title is recognised in delta's metadata.
+---@param bufnr integer
+---@return { row: integer, path: string }[]
+local function file_titles(bufnr)
+  local titles = {}
+  for _, a in ipairs(vim.b[bufnr].delta_artifacts or {}) do
+    if a.type == "title" and not tostring(a.content):match("^Line %d") then
+      titles[#titles + 1] = { row = a.row_number + 1, path = a.content }
+    end
+  end
+  return titles
+end
+
 ---Derive file-title rows and hunk-start rows from delta.lua's buffer metadata.
----File titles come from `b:delta_artifacts` (type "title", excluding the
----"Line N" multi-hunk headers). Hunk starts come from `b:delta_diff_data_set`,
----each hunk's first line carrying its rendered row in `formatted_diff_line_num`
----(0-based; +1 for the 1-based buffer line).
+---File titles come from `file_titles` (above). Hunk starts come from
+---`b:delta_diff_data_set`, each hunk's first line carrying its rendered row in
+---`formatted_diff_line_num` (0-based; +1 for the 1-based buffer line).
 ---@param bufnr integer
 ---@return integer[] files, integer[] hunks
 local function compute_nav(bufnr)
   local files, hunks = {}, {}
 
-  for _, a in ipairs(vim.b[bufnr].delta_artifacts or {}) do
-    if a.type == "title" and not tostring(a.content):match("^Line %d") then
-      files[#files + 1] = a.row_number + 1
-    end
+  for _, t in ipairs(file_titles(bufnr)) do
+    files[#files + 1] = t.row
   end
 
   for _, file in ipairs(vim.b[bufnr].delta_diff_data_set or {}) do
@@ -167,10 +196,8 @@ function M.drawer()
     return
   end
   local items = {}
-  for _, a in ipairs(vim.b[bufnr].delta_artifacts or {}) do
-    if a.type == "title" and not tostring(a.content):match("^Line %d") then
-      items[#items + 1] = { bufnr = bufnr, lnum = a.row_number + 1, col = 1, text = a.content }
-    end
+  for _, t in ipairs(file_titles(bufnr)) do
+    items[#items + 1] = { bufnr = bufnr, lnum = t.row, col = 1, text = t.path }
   end
   if #items == 0 then
     return
@@ -194,9 +221,10 @@ function M.refresh()
 end
 
 ---Default Claude-context formatter (matches prompt-yank's "claude" xml preset).
+---Exposed on M (pure) so the yank text contract can be unit-tested.
 ---@param ctx { path: string, lines: string, language: string, content: string }
 ---@return string
-local function default_format(ctx)
+function M.default_format(ctx)
   return ('<file path="%s" lines="%s" language="%s">\n%s\n</file>'):format(
     ctx.path,
     ctx.lines,
@@ -211,14 +239,8 @@ end
 ---@param row integer 1-based
 ---@return string|nil
 local function file_at(bufnr, row)
-  local titles = {}
-  for _, a in ipairs(vim.b[bufnr].delta_artifacts or {}) do
-    if a.type == "title" and not tostring(a.content):match("^Line %d") then
-      titles[#titles + 1] = { row = a.row_number + 1, path = a.content }
-    end
-  end
   local path
-  for _, t in ipairs(titles) do
+  for _, t in ipairs(file_titles(bufnr)) do
     if t.row <= row then
       path = t.path
     else
@@ -270,7 +292,7 @@ function M.yank(opts)
   local content = table.concat(vim.api.nvim_buf_get_lines(bufnr, l1 - 1, l2, false), "\n")
 
   local cfg = require("winter").config.diff or {}
-  local formatter = cfg.yank_format or default_format
+  local formatter = cfg.yank_format or M.default_format
   local text = formatter({ path = path, lines = span, language = language, content = content })
 
   for _, reg in ipairs(cfg.yank_registers or { "+", '"' }) do
@@ -417,7 +439,8 @@ end
 ---Open the cross-repo diff for a feature environment.
 ---
 --- Fetches `winter [global_args] ws diff <env> --no-headers [--branch]`
---- asynchronously and renders it via delta.lua in a new tab.
+--- asynchronously and renders it via delta.lua, replacing the buffer in the
+--- current window (see the module header for why it is just a buffer).
 ---
 ---@param cfg Winter.Config plugin configuration
 ---@param opts? { env?: string, mode?: string, restore_view?: table } env (default "alpha"); mode ("branch"|"uncommitted"|"staged", default cfg.diff.mode); restore_view is an internal winsaveview() table reapplied after render (used by refresh)
@@ -429,6 +452,16 @@ function M.open(cfg, opts)
   local mode = opts.mode or (cfg.diff and cfg.diff.mode) or "branch"
   if not VALID_MODES[mode] then
     vim.notify(("winter.diff: invalid mode %q (use branch|uncommitted|staged)"):format(mode), vim.log.levels.ERROR)
+    return
+  end
+
+  -- Guard the CLI before spawning: vim.system raises when the executable cannot
+  -- be found, so check first and surface a clean notify (parity with worktrees).
+  if vim.fn.executable(cfg.winter_cmd) == 0 then
+    vim.notify(
+      ("winter.diff: winter CLI not found on PATH (looked for %q)"):format(cfg.winter_cmd),
+      vim.log.levels.ERROR
+    )
     return
   end
 

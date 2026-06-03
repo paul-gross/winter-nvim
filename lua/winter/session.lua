@@ -32,9 +32,14 @@ local M = {}
 
 ---Build a deterministic session filename for an absolute path.
 ---
---- Every character that is not a letter or digit is replaced with `_`. We avoid
---- `%`/`#` (and other punctuation) because Vim expands them in Ex-command file
---- arguments, which corrupts `:mksession` / `:source` targets.
+--- The readable part of the filename replaces every non-alphanumeric character
+--- with `_`. We avoid `%`/`#` (and other punctuation) because Vim expands them in
+--- Ex-command file arguments, which corrupts `:mksession` / `:source` targets.
+---
+--- Because that slug is lossy — `/a/b`, `/a.b`, and `/a-b` all collapse to the
+--- same `_a_b` — an 8-hex-char prefix of the path's sha256 is appended to
+--- guarantee distinct paths map to distinct files. The slug stays for human
+--- legibility; the hash is what makes the mapping injective.
 ---
 ---@param path string absolute target path
 ---@param session_dir string directory in which session files live
@@ -44,7 +49,8 @@ function M.session_file(path, session_dir)
   -- "/a/b" or "/a/b/" (e.g. after fnamemodify(..., ":p")) maps to one file.
   local normalized = path:gsub("/+$", "")
   local slug = normalized:gsub("[^%w]", "_")
-  return session_dir .. "/" .. slug .. ".vim"
+  local hash = vim.fn.sha256(normalized):sub(1, 8)
+  return session_dir .. "/" .. slug .. "_" .. hash .. ".vim"
 end
 
 ---Switch Neovim's working directory to `path`, loading or creating a session.

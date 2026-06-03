@@ -39,8 +39,9 @@ end, {
 })
 
 -- :WinterDiff[!] [env]
--- Opens the cross-repo feature diff for ENV (default "alpha") in a new tab.
--- With no bang: branch diff (HEAD vs origin/main) via config.diff.mode.
+-- Opens the cross-repo feature diff for ENV (default "alpha"), replacing the
+-- buffer in the current window.
+-- With no bang: branch diff (HEAD vs main) via config.diff.mode.
 -- With bang (:WinterDiff!): uncommitted working-tree changes.
 vim.api.nvim_create_user_command("WinterDiff", function(cmd_opts)
   local env = cmd_opts.fargs[1] or "alpha"

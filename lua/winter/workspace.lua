@@ -3,17 +3,18 @@
 --- Provides a pure helper used by winter.nvim:
 ---
 ---   `find_root(start_path)` — walks up from `start_path` looking for a
----   directory that contains both `.winter/config.toml` and
----   `tools/winter-cli/`. Returns the path string on success, nil on failure.
+---   directory that contains a `.winter/` directory. Returns the path string on
+---   success, nil on failure.
 ---@brief ]]
 
 local M = {}
 
 ---Walk up from `start_path` to find the winter workspace root.
 ---
---- The workspace root is the first ancestor directory that satisfies BOTH:
----   - `<dir>/.winter/config.toml` is a readable file
----   - `<dir>/tools/winter-cli` is a directory
+--- The workspace root is the first ancestor directory that contains a `.winter/`
+--- directory. This matches the winter CLI's own root convention (it locates the
+--- workspace by walking up for a `.winter/` directory), so the plugin recognises
+--- every winter workspace — not just ones that vendor the CLI under `tools/`.
 ---
 --- Returns nil when no such ancestor exists (i.e. cwd is not inside a
 --- winter workspace).
@@ -30,9 +31,7 @@ function M.find_root(start_path)
   -- Walk up, stopping at the filesystem root.
   local prev = nil
   while dir ~= prev do
-    local toml = dir .. "/.winter/config.toml"
-    local cli_dir = dir .. "/tools/winter-cli"
-    if vim.fn.filereadable(toml) == 1 and vim.fn.isdirectory(cli_dir) == 1 then
+    if vim.fn.isdirectory(dir .. "/.winter") == 1 then
       return dir
     end
     prev = dir

@@ -273,6 +273,24 @@ T["diff.diff_args staged mode appends --staged"] = function()
 end
 
 -- ---------------------------------------------------------------------------
+-- diff.default_format — pure Claude-context yank formatter
+-- ---------------------------------------------------------------------------
+
+T["diff.default_format emits the claude xml file shape"] = function()
+  local diff = require("winter.diff")
+  local out = diff.default_format({
+    path = "winter/lua/foo.lua",
+    lines = "10-12",
+    language = "lua",
+    content = "local x = 1",
+  })
+  MiniTest.expect.equality(
+    out,
+    '<file path="winter/lua/foo.lua" lines="10-12" language="lua">\nlocal x = 1\n</file>'
+  )
+end
+
+-- ---------------------------------------------------------------------------
 -- worktrees.parse_items — pure JSON parsing with and without status fields
 -- ---------------------------------------------------------------------------
 
@@ -423,16 +441,34 @@ T["workspace.find_root returns nil outside a winter workspace"] = function()
   vim.fn.delete(tmpdir, "rf")
 end
 
-T["workspace.find_root returns root when markers are present"] = function()
+T["workspace.find_root returns root when .winter/ is present"] = function()
   local workspace = require("winter.workspace")
 
   -- Build a minimal fake workspace under a temp dir.
   local tmpdir = vim.fn.tempname()
   vim.fn.mkdir(tmpdir .. "/.winter", "p")
-  vim.fn.mkdir(tmpdir .. "/tools/winter-cli", "p")
   vim.fn.writefile({ "[workspace]" }, tmpdir .. "/.winter/config.toml")
 
   -- Start searching from a nested subdirectory.
+  local nested = tmpdir .. "/alpha/myrepo/src"
+  vim.fn.mkdir(nested, "p")
+
+  local root = workspace.find_root(nested)
+  MiniTest.expect.equality(root, tmpdir)
+
+  vim.fn.delete(tmpdir, "rf")
+end
+
+-- Regression: a consumer workspace has `.winter/` but does NOT vendor the CLI
+-- under `tools/winter-cli/`. The plugin must still recognise it (it keys on the
+-- `.winter/` directory alone, matching the winter CLI's own root convention).
+T["workspace.find_root recognises a workspace without tools/winter-cli"] = function()
+  local workspace = require("winter.workspace")
+
+  local tmpdir = vim.fn.tempname()
+  vim.fn.mkdir(tmpdir .. "/.winter", "p")
+  -- Deliberately no tools/winter-cli and no config.toml file.
+
   local nested = tmpdir .. "/alpha/myrepo/src"
   vim.fn.mkdir(nested, "p")
 
@@ -447,7 +483,6 @@ T["workspace.find_root works when given a file path"] = function()
 
   local tmpdir = vim.fn.tempname()
   vim.fn.mkdir(tmpdir .. "/.winter", "p")
-  vim.fn.mkdir(tmpdir .. "/tools/winter-cli", "p")
   vim.fn.writefile({ "[workspace]" }, tmpdir .. "/.winter/config.toml")
 
   local fake_file = tmpdir .. "/myfile.lua"
@@ -528,6 +563,22 @@ T["session.session_file varies with different paths"] = function()
 
   -- Different paths must produce different filenames.
   MiniTest.expect.equality(sf_alpha ~= sf_beta, true)
+end
+
+-- Regression: paths that slugify identically (every non-alphanumeric char →
+-- "_") must still map to distinct session files. The appended path hash makes
+-- the mapping injective; without it "/ws/a-b" and "/ws/a/b" would collide.
+T["session.session_file disambiguates paths with the same slug"] = function()
+  local session = require("winter.session")
+
+  local dir = "/tmp/sessions"
+  local sf_slash = session.session_file("/ws/a/b", dir)
+  local sf_dash = session.session_file("/ws/a-b", dir)
+  local sf_dot = session.session_file("/ws/a.b", dir)
+
+  MiniTest.expect.equality(sf_slash ~= sf_dash, true)
+  MiniTest.expect.equality(sf_slash ~= sf_dot, true)
+  MiniTest.expect.equality(sf_dash ~= sf_dot, true)
 end
 
 -- ---------------------------------------------------------------------------
