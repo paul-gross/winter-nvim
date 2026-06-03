@@ -5,6 +5,7 @@
 --- Checks performed:
 ---   1. snacks.nvim can be required (folke/snacks.nvim must be installed)
 ---   2. The configured winter CLI executable is on PATH
+---   3. delta.lua can be required (optional; required only for :WinterDiff)
 ---@brief ]]
 
 local M = {}
@@ -48,6 +49,17 @@ function M.check()
     vim.health.error(
       ("winter CLI not found (looked for %q)"):format(winter_cmd),
       "Install winter from https://github.com/paul-gross/winter and ensure it is on PATH, or set winter_cmd in setup()"
+    )
+  end
+
+  -- 3. delta.lua availability (only needed for the :WinterDiff viewer)
+  local ok_delta, _ = pcall(require, "delta")
+  if ok_delta then
+    vim.health.ok("delta.lua is available (:WinterDiff renderer)")
+  else
+    vim.health.warn(
+      "delta.lua is not available",
+      "Install kokusenz/delta.lua to use the :WinterDiff cross-repo diff viewer"
     )
   end
 end

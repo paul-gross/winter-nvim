@@ -254,6 +254,25 @@ T["worktrees.build_subcommand with status includes --status"] = function()
 end
 
 -- ---------------------------------------------------------------------------
+-- diff.diff_args — pure mode→argv mapping for `winter ws diff`
+-- ---------------------------------------------------------------------------
+
+T["diff.diff_args branch mode appends --branch"] = function()
+  local diff = require("winter.diff")
+  MiniTest.expect.equality(diff.diff_args("alpha", "branch"), { "ws", "diff", "alpha", "--no-headers", "--branch" })
+end
+
+T["diff.diff_args uncommitted mode appends no flag"] = function()
+  local diff = require("winter.diff")
+  MiniTest.expect.equality(diff.diff_args("beta", "uncommitted"), { "ws", "diff", "beta", "--no-headers" })
+end
+
+T["diff.diff_args staged mode appends --staged"] = function()
+  local diff = require("winter.diff")
+  MiniTest.expect.equality(diff.diff_args("gamma", "staged"), { "ws", "diff", "gamma", "--no-headers", "--staged" })
+end
+
+-- ---------------------------------------------------------------------------
 -- worktrees.parse_items — pure JSON parsing with and without status fields
 -- ---------------------------------------------------------------------------
 

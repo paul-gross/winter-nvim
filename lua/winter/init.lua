@@ -63,6 +63,16 @@ function M.worktrees(opts)
   require("winter.worktrees").open(M.config, opts)
 end
 
+---Open the cross-repo feature diff viewer for an environment.
+---
+--- Fetches the aggregated `winter ws diff <env>` stream and renders every repo's
+--- changes in one delta.lua buffer. See |winter.diff|.
+---
+---@param opts? { env?: string, mode?: string } env (default "alpha") and mode ("branch"|"uncommitted"|"staged")
+function M.diff(opts)
+  require("winter.diff").open(M.config, opts)
+end
+
 ---Switch Neovim into `path`, loading an existing session or creating a new one.
 ---
 --- This function is exposed on the public API so it can be called from scripts

@@ -17,6 +17,9 @@ local subcommands = {
     local opts = (#args > 0) and { winter_args = args } or nil
     require("winter").worktrees(opts)
   end,
+  diff = function(args)
+    require("winter").diff({ env = args[1] })
+  end,
 }
 
 -- :WinterWorktrees [winter-args...]
@@ -30,6 +33,24 @@ vim.api.nvim_create_user_command("WinterWorktrees", function(cmd_opts)
 end, {
   nargs = "*",
   desc = "Open the winter worktrees picker (optional: pass global winter args)",
+  complete = function()
+    return {}
+  end,
+})
+
+-- :WinterDiff[!] [env]
+-- Opens the cross-repo feature diff for ENV (default "alpha") in a new tab.
+-- With no bang: branch diff (HEAD vs origin/main) via config.diff.mode.
+-- With bang (:WinterDiff!): uncommitted working-tree changes.
+vim.api.nvim_create_user_command("WinterDiff", function(cmd_opts)
+  local env = cmd_opts.fargs[1] or "alpha"
+  -- bang forces uncommitted; otherwise nil lets M.open resolve cfg.diff.mode.
+  local mode = cmd_opts.bang and "uncommitted" or nil
+  require("winter").diff({ env = env, mode = mode })
+end, {
+  nargs = "?",
+  bang = true,
+  desc = "Open the cross-repo feature diff (! = uncommitted working tree)",
   complete = function()
     return {}
   end,
