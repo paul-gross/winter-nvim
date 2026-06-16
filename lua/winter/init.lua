@@ -66,7 +66,7 @@ end
 ---Open the cross-repo feature diff viewer for an environment.
 ---
 --- Fetches the aggregated `winter ws diff <env>` stream and renders every repo's
---- changes in one delta.lua buffer. See |winter.diff|.
+--- changes in one delta-rendered buffer. See |winter.diff|.
 ---
 ---@param opts? { env?: string, mode?: string } env (default "alpha") and mode ("branch"|"uncommitted"|"staged")
 function M.diff(opts)

@@ -2,9 +2,10 @@
 ---@brief [[
 --- Renders the aggregated `winter ws diff <env>` stream — every repo's changes
 --- in one repo-prefixed unified diff — into a single read-only buffer using
---- delta.lua (https://github.com/kokusenz/delta.lua) as the renderer.
+--- the `delta` renderer module shipped by deltaview.nvim
+--- (https://github.com/kokusenz/deltaview.nvim) as the renderer.
 ---
---- delta.lua's `patch_diff` accepts an arbitrary unified-diff STRING, which is
+--- The `delta` module's `patch_diff` accepts an arbitrary unified-diff STRING, which is
 --- exactly what `winter ws diff --no-headers` emits, so the whole feature shows
 --- in one delta-styled buffer (per-file titles, gutter source line numbers,
 --- word-level highlighting) — something git-ref-bound viewers cannot do.
@@ -32,13 +33,14 @@
 --- tab, drawer, or side-by-side layout is forced). Open a tab/split yourself
 --- first if you want one.
 ---
---- Requires `kokusenz/delta.lua` on the runtimepath. The navigation/yank helpers
---- read delta.lua's buffer metadata (`b:delta_artifacts`, `b:delta_diff_data_set`,
---- `b:delta_line_map`) and field names (`row_number`, `formatted_diff_line_num`,
---- `line_type`, line-map `new`/`old`) directly, so they are coupled to delta.lua's
---- internal schema. Verified against kokusenz/delta.lua as of 2026-06; a delta
---- bump that renames these makes navigation degrade to a no-op (readers fall back
---- to empty), not error.
+--- Requires the `delta` module (provided by `kokusenz/deltaview.nvim`) on the
+--- runtimepath. The navigation/yank helpers read the delta renderer's buffer
+--- metadata (`b:delta_artifacts`, `b:delta_diff_data_set`, `b:delta_line_map`)
+--- and field names (`row_number`, `formatted_diff_line_num`, `line_type`,
+--- line-map `new`/`old`) directly, so they are coupled to the renderer's
+--- internal schema. Verified against deltaview.nvim's embedded delta module as
+--- of 2026-06; a delta bump that renames these makes navigation degrade to a
+--- no-op (readers fall back to empty), not error.
 ---@brief ]]
 
 local cli = require("winter.cli")
@@ -50,12 +52,12 @@ local M = {}
 -- rows are 1-based buffer lines of file titles and hunk starts respectively.
 local STATE = "winter_diff"
 
----Resolve the winter renderer (delta.lua), or notify and return nil.
+---Resolve the winter renderer (the `delta` module), or notify and return nil.
 ---@return table|nil delta
 local function load_delta()
   local ok, delta = pcall(require, "delta")
   if not ok then
-    vim.notify("winter.diff: delta.lua not found. Install kokusenz/delta.lua to use :WinterDiff.", vim.log.levels.ERROR)
+    vim.notify("winter.diff: delta renderer not found. Install kokusenz/deltaview.nvim to use :WinterDiff.", vim.log.levels.ERROR)
     return nil
   end
   return delta
@@ -78,7 +80,7 @@ function M.diff_args(env, mode)
   return args
 end
 
----Collect the file-title artifacts for a diff buffer: delta.lua `title`
+---Collect the file-title artifacts for a diff buffer: the delta renderer's `title`
 ---artifacts, excluding the "Line N" multi-hunk sub-headers. Returns 1-based
 ---buffer rows paired with the repo-prefixed path each title carries. The single
 ---place that knows how a file title is recognised in delta's metadata.
@@ -94,7 +96,7 @@ local function file_titles(bufnr)
   return titles
 end
 
----Derive file-title rows and hunk-start rows from delta.lua's buffer metadata.
+---Derive file-title rows and hunk-start rows from the delta renderer's buffer metadata.
 ---File titles come from `file_titles` (above). Hunk starts come from
 ---`b:delta_diff_data_set`, each hunk's first line carrying its rendered row in
 ---`formatted_diff_line_num` (0-based; +1 for the 1-based buffer line).
@@ -271,8 +273,8 @@ local function source_lines(bufnr, l1, l2)
 end
 
 ---Yank the current line (or a visual/range selection) as LLM context, with the
----real repo-prefixed path and source line numbers recovered from delta.lua's
----metadata. Copies to the configured registers.
+---real repo-prefixed path and source line numbers recovered from the delta
+---renderer's metadata. Copies to the configured registers.
 ---@param opts? { line1?: integer, line2?: integer }
 function M.yank(opts)
   opts = opts or {}
@@ -439,7 +441,7 @@ end
 ---Open the cross-repo diff for a feature environment.
 ---
 --- Fetches `winter [global_args] ws diff <env> --no-headers [--branch]`
---- asynchronously and renders it via delta.lua, replacing the buffer in the
+--- asynchronously and renders it via the delta renderer, replacing the buffer in the
 --- current window (see the module header for why it is just a buffer).
 ---
 ---@param cfg Winter.Config plugin configuration
