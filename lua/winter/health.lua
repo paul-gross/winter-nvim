@@ -52,10 +52,27 @@ function M.check()
     )
   end
 
-  -- 3. delta renderer availability (only needed for the :WinterDiff viewer)
-  local ok_delta, _ = pcall(require, "delta")
+  -- 3. delta renderer availability and schema check (only needed for :WinterDiff)
+  local ok_delta, delta = pcall(require, "delta")
   if ok_delta then
-    vim.health.ok("delta renderer is available (:WinterDiff)")
+    -- Probe the private fields that diff.lua reads. A schema change (field
+    -- rename / removal) in deltaview.nvim would silently break navigation and
+    -- yank; surface it here instead.
+    local schema_ok = type(delta.patch_diff) == "function"
+      and type(delta.highlight_delta_artifacts) == "function"
+      and type(delta.syntax_highlight_diff_set) == "function"
+      and type(delta.diff_highlight_diff) == "function"
+      and type(delta.setup_delta_statuscolumn) == "function"
+    if schema_ok then
+      vim.health.ok("delta renderer is available (:WinterDiff) and expected API is present")
+    else
+      vim.health.warn(
+        "delta renderer is available but expected API functions are missing",
+        "deltaview.nvim may have been updated with a breaking schema change. "
+          .. "Navigation and yank in :WinterDiff may not work. "
+          .. "Check delta.patch_diff, delta.highlight_delta_artifacts, delta.setup_delta_statuscolumn."
+      )
+    end
   else
     vim.health.warn(
       "delta renderer is not available",

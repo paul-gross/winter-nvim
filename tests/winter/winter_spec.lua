@@ -284,10 +284,7 @@ T["diff.default_format emits the claude xml file shape"] = function()
     language = "lua",
     content = "local x = 1",
   })
-  MiniTest.expect.equality(
-    out,
-    '<file path="winter/lua/foo.lua" lines="10-12" language="lua">\nlocal x = 1\n</file>'
-  )
+  MiniTest.expect.equality(out, '<file path="winter/lua/foo.lua" lines="10-12" language="lua">\nlocal x = 1\n</file>')
 end
 
 -- ---------------------------------------------------------------------------
@@ -636,6 +633,380 @@ T["open() alias notifies when not inside a winter workspace"] = function()
   workspace.find_root = orig_find_root
   vim.notify = orig_notify
   MiniTest.expect.equality(notified, true)
+end
+
+-- ---------------------------------------------------------------------------
+-- config.validate — per-field vim.validate (nvim-0.11 non-deprecated form)
+-- ---------------------------------------------------------------------------
+
+T["config.validate accepts valid opts without error"] = function()
+  local config = require("winter.config")
+  -- Should not raise
+  local ok, err = pcall(config.validate, {
+    winter_cmd = "winter",
+    winter_args = { "--winter=/some/path" },
+    use_sessions = true,
+    create_sessions = false,
+    cd_command = "tcd",
+    diff = { mode = "branch", drawer = false, yank_registers = { "+" } },
+  })
+  MiniTest.expect.equality(ok, true)
+  MiniTest.expect.equality(err, nil)
+end
+
+T["config.validate rejects non-string winter_cmd"] = function()
+  local config = require("winter.config")
+  local ok, err = pcall(config.validate, { winter_cmd = 42 })
+  MiniTest.expect.equality(ok, false)
+  MiniTest.expect.equality(type(err), "string")
+end
+
+T["config.validate rejects non-table winter_args"] = function()
+  local config = require("winter.config")
+  local ok, err = pcall(config.validate, { winter_args = "bad" })
+  MiniTest.expect.equality(ok, false)
+  MiniTest.expect.equality(type(err), "string")
+end
+
+T["config.validate rejects invalid diff.mode"] = function()
+  local config = require("winter.config")
+  local ok, err = pcall(config.validate, { diff = { mode = "invalid" } })
+  MiniTest.expect.equality(ok, false)
+  MiniTest.expect.equality(type(err), "string")
+  MiniTest.expect.equality(err:find("diff.mode") ~= nil, true)
+end
+
+T["config.validate rejects non-boolean diff.drawer"] = function()
+  local config = require("winter.config")
+  local ok, err = pcall(config.validate, { diff = { drawer = "yes" } })
+  MiniTest.expect.equality(ok, false)
+  MiniTest.expect.equality(type(err), "string")
+end
+
+-- ---------------------------------------------------------------------------
+-- diff.source_lines — resolves buffer rows to source line numbers via
+-- b:delta_line_map. All tests use a hand-built vim.b[bufnr] fixture.
+-- ---------------------------------------------------------------------------
+
+T["diff.source_lines returns nil,nil when map is empty"] = function()
+  local diff = require("winter.diff")
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.b[bufnr].delta_line_map = {}
+
+  local lo, hi = diff.source_lines(bufnr, 1, 3)
+  MiniTest.expect.equality(lo, nil)
+  MiniTest.expect.equality(hi, nil)
+
+  vim.api.nvim_buf_delete(bufnr, { force = true })
+end
+
+T["diff.source_lines returns new line number for a single added row"] = function()
+  local diff = require("winter.diff")
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  -- Row 5 maps to new source line 42
+  vim.b[bufnr].delta_line_map = { [5] = { new = 42 } }
+
+  local lo, hi = diff.source_lines(bufnr, 5, 5)
+  MiniTest.expect.equality(lo, 42)
+  MiniTest.expect.equality(hi, 42)
+
+  vim.api.nvim_buf_delete(bufnr, { force = true })
+end
+
+T["diff.source_lines uses old when new is absent (removed line)"] = function()
+  local diff = require("winter.diff")
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  -- Row 3 is a removed line — only old is set
+  vim.b[bufnr].delta_line_map = { [3] = { old = 10 } }
+
+  local lo, hi = diff.source_lines(bufnr, 3, 3)
+  MiniTest.expect.equality(lo, 10)
+  MiniTest.expect.equality(hi, 10)
+
+  vim.api.nvim_buf_delete(bufnr, { force = true })
+end
+
+T["diff.source_lines computes min/max over a multi-row range"] = function()
+  local diff = require("winter.diff")
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.b[bufnr].delta_line_map = {
+    [2] = { new = 10 },
+    [3] = { new = 11 },
+    [4] = { new = 15 }, -- gap — still tracked
+  }
+
+  local lo, hi = diff.source_lines(bufnr, 2, 4)
+  MiniTest.expect.equality(lo, 10)
+  MiniTest.expect.equality(hi, 15)
+
+  vim.api.nvim_buf_delete(bufnr, { force = true })
+end
+
+-- ---------------------------------------------------------------------------
+-- diff.file_at — walks b:delta_artifacts to find the file path for a row
+-- ---------------------------------------------------------------------------
+
+T["diff.file_at returns nil when buffer has no artifacts"] = function()
+  local diff = require("winter.diff")
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.b[bufnr].delta_artifacts = {}
+
+  MiniTest.expect.equality(diff.file_at(bufnr, 1), nil)
+
+  vim.api.nvim_buf_delete(bufnr, { force = true })
+end
+
+T["diff.file_at returns the path of the file title at or before the row"] = function()
+  local diff = require("winter.diff")
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  -- row_number is 0-based; file_at converts +1 to 1-based
+  vim.b[bufnr].delta_artifacts = {
+    { type = "title", row_number = 0, content = "alpha/winter/lua/foo.lua" },
+    { type = "title", row_number = 9, content = "alpha/myrepo/src/bar.py" },
+  }
+
+  -- Row 1 is inside the first file (row_number 0 → buf row 1)
+  MiniTest.expect.equality(diff.file_at(bufnr, 1), "alpha/winter/lua/foo.lua")
+  -- Row 5 is also inside the first file
+  MiniTest.expect.equality(diff.file_at(bufnr, 5), "alpha/winter/lua/foo.lua")
+  -- Row 10 is at the second file title (row_number 9 → buf row 10)
+  MiniTest.expect.equality(diff.file_at(bufnr, 10), "alpha/myrepo/src/bar.py")
+  -- Row 20 is after the last title — still returns the last file
+  MiniTest.expect.equality(diff.file_at(bufnr, 20), "alpha/myrepo/src/bar.py")
+
+  vim.api.nvim_buf_delete(bufnr, { force = true })
+end
+
+T["diff.file_at excludes 'Line N' sub-headers from file titles"] = function()
+  local diff = require("winter.diff")
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.b[bufnr].delta_artifacts = {
+    { type = "title", row_number = 0, content = "alpha/winter/lua/foo.lua" },
+    -- This is a multi-hunk sub-header — must NOT be treated as a file title
+    { type = "title", row_number = 4, content = "Line 12" },
+  }
+
+  -- Row 5 (sub-header row) should still resolve to the real file title, not "Line 12"
+  MiniTest.expect.equality(diff.file_at(bufnr, 5), "alpha/winter/lua/foo.lua")
+
+  vim.api.nvim_buf_delete(bufnr, { force = true })
+end
+
+-- ---------------------------------------------------------------------------
+-- diff.compute_nav — derives sorted file/hunk row lists from delta metadata
+-- ---------------------------------------------------------------------------
+
+T["diff.compute_nav returns empty lists when buffer has no metadata"] = function()
+  local diff = require("winter.diff")
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  -- No metadata set — should degrade gracefully to empty lists
+  local files, hunks = diff.compute_nav(bufnr)
+  MiniTest.expect.equality(files, {})
+  MiniTest.expect.equality(hunks, {})
+
+  vim.api.nvim_buf_delete(bufnr, { force = true })
+end
+
+T["diff.compute_nav extracts file rows from title artifacts"] = function()
+  local diff = require("winter.diff")
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.b[bufnr].delta_artifacts = {
+    { type = "title", row_number = 0, content = "alpha/winter/foo.lua" },
+    { type = "title", row_number = 19, content = "alpha/myrepo/bar.py" },
+    -- A non-title artifact — must be ignored
+    { type = "other", row_number = 5, content = "something" },
+  }
+  vim.b[bufnr].delta_diff_data_set = {}
+
+  local files, hunks = diff.compute_nav(bufnr)
+  MiniTest.expect.equality(files, { 1, 20 }) -- row_number + 1
+  MiniTest.expect.equality(hunks, {})
+
+  vim.api.nvim_buf_delete(bufnr, { force = true })
+end
+
+T["diff.compute_nav extracts hunk rows, preferring the first changed line"] = function()
+  local diff = require("winter.diff")
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.b[bufnr].delta_artifacts = {
+    { type = "title", row_number = 0, content = "alpha/winter/foo.lua" },
+  }
+  vim.b[bufnr].delta_diff_data_set = {
+    {
+      hunks = {
+        {
+          lines = {
+            -- First line is context — should be skipped
+            { line_type = "context", formatted_diff_line_num = 2 },
+            -- Second line is added — this should be the hunk row
+            { line_type = "added", formatted_diff_line_num = 3 },
+          },
+        },
+        {
+          lines = {
+            -- All context (no changed lines) — fall back to first line
+            { line_type = "context", formatted_diff_line_num = 9 },
+          },
+        },
+      },
+    },
+  }
+
+  local _, hunks = diff.compute_nav(bufnr)
+  -- First hunk: lands on added line (3 + 1 = 4)
+  -- Second hunk: all context, falls back to first line (9 + 1 = 10)
+  MiniTest.expect.equality(hunks, { 4, 10 })
+
+  vim.api.nvim_buf_delete(bufnr, { force = true })
+end
+
+-- ---------------------------------------------------------------------------
+-- diff.open — async path via injected runner
+-- The runner is injected as the 3rd argument to M.open. Because M.open wraps
+-- the callback in vim.schedule(), we flush pending scheduled calls with
+-- vim.wait() after the synchronous runner fires.
+-- ---------------------------------------------------------------------------
+
+T["diff.open passes correct argv to the runner (branch mode)"] = function()
+  local diff = require("winter.diff")
+  local cfg = vim.tbl_deep_extend("force", require("winter.config").defaults, {
+    winter_cmd = "winter",
+    winter_args = {},
+  })
+
+  -- Override workspace discovery so there is always a root
+  local workspace = require("winter.workspace")
+  local orig_from_context = workspace.find_root_from_context
+  workspace.find_root_from_context = function()
+    return "/fake/root"
+  end
+
+  local captured_argv = nil
+  local fake_runner = function(argv, _cwd, on_exit)
+    captured_argv = argv
+    -- Return empty diff so open does not try to render
+    on_exit({ code = 0, stdout = "", stderr = "" })
+  end
+
+  diff.open(cfg, { env = "gamma", mode = "branch" }, fake_runner)
+  -- Flush vim.schedule callbacks
+  vim.wait(100, function()
+    return captured_argv ~= nil
+  end, 10)
+
+  workspace.find_root_from_context = orig_from_context
+
+  MiniTest.expect.equality(type(captured_argv), "table")
+  -- { "winter", "ws", "diff", "gamma", "--no-headers", "--branch" }
+  MiniTest.expect.equality(captured_argv[1], "winter")
+  MiniTest.expect.equality(captured_argv[2], "ws")
+  MiniTest.expect.equality(captured_argv[3], "diff")
+  MiniTest.expect.equality(captured_argv[4], "gamma")
+  MiniTest.expect.equality(captured_argv[5], "--no-headers")
+  MiniTest.expect.equality(captured_argv[6], "--branch")
+end
+
+T["diff.open threads winter_args into the runner argv"] = function()
+  local diff = require("winter.diff")
+  local cfg = vim.tbl_deep_extend("force", require("winter.config").defaults, {
+    winter_cmd = "winter",
+    winter_args = {},
+  })
+
+  local workspace = require("winter.workspace")
+  local orig_from_context = workspace.find_root_from_context
+  workspace.find_root_from_context = function()
+    return "/fake/root"
+  end
+
+  local captured_argv = nil
+  local fake_runner = function(argv, _cwd, on_exit)
+    captured_argv = argv
+    on_exit({ code = 0, stdout = "", stderr = "" })
+  end
+
+  diff.open(cfg, { env = "alpha", mode = "uncommitted", winter_args = { "--winter=/dev/path" } }, fake_runner)
+  vim.wait(100, function()
+    return captured_argv ~= nil
+  end, 10)
+
+  workspace.find_root_from_context = orig_from_context
+
+  MiniTest.expect.equality(type(captured_argv), "table")
+  -- --winter arg must come right after winter_cmd, before subcommand
+  MiniTest.expect.equality(captured_argv[2], "--winter=/dev/path")
+  MiniTest.expect.equality(captured_argv[3], "ws")
+  MiniTest.expect.equality(captured_argv[4], "diff")
+end
+
+T["diff.open notifies error on CLI failure"] = function()
+  local diff = require("winter.diff")
+  local cfg = vim.tbl_deep_extend("force", require("winter.config").defaults, {
+    winter_cmd = "winter",
+    winter_args = {},
+  })
+
+  local workspace = require("winter.workspace")
+  local orig_from_context = workspace.find_root_from_context
+  workspace.find_root_from_context = function()
+    return "/fake/root"
+  end
+
+  local fake_runner = function(_argv, _cwd, on_exit)
+    on_exit({ code = 1, stdout = "", stderr = "cli boom" })
+  end
+
+  local notified_msg = nil
+  local orig_notify = vim.notify
+  vim.notify = function(msg, _level, _opts)
+    notified_msg = msg
+  end
+
+  diff.open(cfg, { env = "alpha", mode = "branch" }, fake_runner)
+  vim.wait(200, function()
+    return notified_msg ~= nil
+  end, 10)
+
+  workspace.find_root_from_context = orig_from_context
+  vim.notify = orig_notify
+
+  MiniTest.expect.equality(type(notified_msg), "string")
+  MiniTest.expect.equality(notified_msg:find("cli boom") ~= nil, true)
+end
+
+T["diff.open notifies when diff is empty (no changes)"] = function()
+  local diff = require("winter.diff")
+  local cfg = vim.tbl_deep_extend("force", require("winter.config").defaults, {
+    winter_cmd = "winter",
+    winter_args = {},
+  })
+
+  local workspace = require("winter.workspace")
+  local orig_from_context = workspace.find_root_from_context
+  workspace.find_root_from_context = function()
+    return "/fake/root"
+  end
+
+  local fake_runner = function(_argv, _cwd, on_exit)
+    on_exit({ code = 0, stdout = "   ", stderr = "" })
+  end
+
+  local notified_msg = nil
+  local orig_notify = vim.notify
+  vim.notify = function(msg, _level, _opts)
+    notified_msg = msg
+  end
+
+  diff.open(cfg, { env = "beta", mode = "uncommitted" }, fake_runner)
+  vim.wait(200, function()
+    return notified_msg ~= nil
+  end, 10)
+
+  workspace.find_root_from_context = orig_from_context
+  vim.notify = orig_notify
+
+  MiniTest.expect.equality(type(notified_msg), "string")
+  MiniTest.expect.equality(notified_msg:find("no changes") ~= nil, true)
 end
 
 return T

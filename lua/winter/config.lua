@@ -48,25 +48,33 @@ M.defaults = {
 ---Validate user-supplied options and raise errors for invalid values.
 ---@param opts Winter.Config
 function M.validate(opts)
-  vim.validate({
-    picker = { opts.picker, "table", true },
-    winter_cmd = { opts.winter_cmd, "string", true },
-    winter_args = { opts.winter_args, "table", true },
-    keymaps = { opts.keymaps, "table", true },
-    use_sessions = { opts.use_sessions, "boolean", true },
-    create_sessions = { opts.create_sessions, "boolean", true },
-    session_dir = { opts.session_dir, "string", true },
-    cd_command = { opts.cd_command, "string", true },
-    diff = { opts.diff, "table", true },
-  })
+  -- Dispatch helper: use the per-field form on Neovim >= 0.11 (silences the
+  -- 0.11 deprecation warning on the table form) and fall back to the table
+  -- form on 0.10, where the per-field signature does not exist.
+  local _has_new_validate = vim.fn.has("nvim-0.11") == 1
+  local function _validate(name, value, vtype, optional)
+    if _has_new_validate then
+      vim.validate(name, value, vtype, optional)
+    else
+      vim.validate({ [name] = { value, vtype, optional } })
+    end
+  end
+
+  _validate("picker", opts.picker, "table", true)
+  _validate("winter_cmd", opts.winter_cmd, "string", true)
+  _validate("winter_args", opts.winter_args, "table", true)
+  _validate("keymaps", opts.keymaps, "table", true)
+  _validate("use_sessions", opts.use_sessions, "boolean", true)
+  _validate("create_sessions", opts.create_sessions, "boolean", true)
+  _validate("session_dir", opts.session_dir, "string", true)
+  _validate("cd_command", opts.cd_command, "string", true)
+  _validate("diff", opts.diff, "table", true)
 
   if opts.diff then
-    vim.validate({
-      mode = { opts.diff.mode, "string", true },
-      drawer = { opts.diff.drawer, "boolean", true },
-      yank_registers = { opts.diff.yank_registers, "table", true },
-      yank_format = { opts.diff.yank_format, "function", true },
-    })
+    _validate("diff.mode", opts.diff.mode, "string", true)
+    _validate("diff.drawer", opts.diff.drawer, "boolean", true)
+    _validate("diff.yank_registers", opts.diff.yank_registers, "table", true)
+    _validate("diff.yank_format", opts.diff.yank_format, "function", true)
 
     if opts.diff.mode ~= nil then
       local valid = { branch = true, uncommitted = true, staged = true }
@@ -85,15 +93,11 @@ function M.validate(opts)
   end
 
   if opts.picker then
-    vim.validate({
-      layout = { opts.picker.layout, "string", true },
-    })
+    _validate("picker.layout", opts.picker.layout, "string", true)
   end
 
   if opts.keymaps then
-    vim.validate({
-      open = { opts.keymaps.open, "string", true },
-    })
+    _validate("keymaps.open", opts.keymaps.open, "string", true)
   end
 end
 

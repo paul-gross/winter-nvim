@@ -145,15 +145,7 @@ function M.open(cfg, opts)
   -- -------------------------------------------------------------------------
   local workspace = require("winter.workspace")
 
-  local buf_name = vim.api.nvim_buf_get_name(0)
-  local start_path
-  if buf_name ~= "" then
-    start_path = vim.fn.fnamemodify(buf_name, ":p:h")
-  else
-    start_path = vim.fn.getcwd()
-  end
-
-  local root = workspace.find_root(start_path)
+  local root = workspace.find_root_from_context()
   if not root then
     vim.notify("winter.nvim: not inside a winter workspace", vim.log.levels.WARN)
     return

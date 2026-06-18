@@ -13,10 +13,11 @@ CONTENTS                                                        *winter-contents
   4. Setup ............................................ |winter-setup|
   5. Configuration .................................... |winter-config|
   6. Commands ......................................... |winter-commands|
-  7. Lua API ........................................... |winter-api|
-  8. Session behaviour ................................. |winter-sessions|
-  9. Health check ..................................... |winter-health|
- 10. Development ...................................... |winter-development|
+  7. Diff viewer ....................................... |winter-diff|
+  8. Lua API ........................................... |winter-api|
+  9. Session behaviour ................................. |winter-sessions|
+ 10. Health check ..................................... |winter-health|
+ 11. Development ...................................... |winter-development|
 
 ==============================================================================
 INTRODUCTION                                                      *winter-intro*
@@ -167,14 +168,65 @@ COMMANDS                                                        *winter-commands
 
   Subcommands:
     worktrees [winter-args...]   Open the worktrees picker (see |:WinterWorktrees|)
+    diff [env] [winter-args...]  Open the cross-repo diff viewer (see |:WinterDiff|)
 
   Unknown subcommand: emits an ERROR notification listing available subcommands.
 
   Examples: >
     :Winter                      " opens worktrees picker
     :Winter worktrees            " same
+    :Winter diff                 " diff for env alpha
+    :Winter diff beta            " diff for env beta
     :Winter worktrees --winter=/home/me/ws/alpha/winter
 <
+
+==============================================================================
+DIFF VIEWER                                                        *winter-diff*
+
+Requires `kokusenz/deltaview.nvim` (the `delta` Lua module) on the runtimepath.
+Run |:checkhealth| winter to verify it is available.
+
+                                                                   *:WinterDiff*
+:WinterDiff[!] [env] [winter-args...]
+  Open the aggregated cross-repo feature diff for the given environment (default
+  "alpha") in the current window, rendered via the delta renderer.
+
+  Without `!`: opens in the mode configured via `config.diff.mode` (default
+  "branch" — HEAD vs main).
+  With `!` (bang): forces "uncommitted" (working-tree) diff regardless of config.
+
+  `[env]` is the first positional argument (default: "alpha"). Any arguments
+  after `[env]` are passed as global winter args for that invocation, overriding
+  `config.winter_args`.
+
+  Examples: >
+    :WinterDiff                  " branch diff for alpha
+    :WinterDiff beta             " branch diff for beta
+    :WinterDiff!                 " uncommitted diff for alpha
+    :WinterDiff! beta            " uncommitted diff for beta
+    :WinterDiff gamma --winter=/home/me/ws/alpha/winter
+<
+  After render, a `User WinterDiffOpened` autocmd fires with
+  `data = { buf, env }`. Use it to bind buffer-local keymaps without the plugin
+  imposing any defaults.
+
+Buffer-local commands (available after :WinterDiff opens):  *winter-diff-commands*
+
+  :WinterDiffNextHunk     Jump cursor to next hunk
+  :WinterDiffPrevHunk     Jump cursor to previous hunk
+  :WinterDiffNextFile     Jump cursor to next file section
+  :WinterDiffPrevFile     Jump cursor to previous file section
+  :WinterDiffDrawer       Open location-list file drawer (window split, opt-in)
+  :WinterDiffRefresh      Re-run diff in place; cursor position preserved
+  :WinterDiffGotoFile     Open source file at cursor line (edit)
+  :WinterDiffGotoFileSplit   ...in a horizontal split
+  :WinterDiffGotoFileVSplit  ...in a vertical split
+  :WinterDiffGotoFileTab     ...in a new tab
+  :WinterDiffClose        Close diff buffer and location-list
+  :WinterDiffYank         Yank current line or range as LLM context (Claude xml)
+
+Navigation (`Next/Prev`) is cursor-based, not loclist-based. The diff buffer is
+read-only; `:w` is a no-op with an INFO notification.
 
 ==============================================================================
 LUA API                                                            *winter-api*
@@ -199,6 +251,16 @@ LUA API                                                            *winter-api*
 `require("winter").open({opts})`
   Deprecated alias for |winter.worktrees()|. Preserved for backwards
   compatibility; prefer `worktrees()` for new code.
+
+                                                              *winter.diff()*
+`require("winter").diff({opts})`
+  Open the cross-repo feature diff viewer. See |winter-diff|.
+
+  `opts` is an optional table:
+    `env` (string)         — environment name (default "alpha").
+    `mode` (string)        — "branch" | "uncommitted" | "staged"
+                             (default `config.diff.mode`).
+    `winter_args` (string[]) — override `config.winter_args` for this call.
 
                                                           *winter.switch_to()*
 `require("winter").switch_to({path}, {label})`
@@ -267,16 +329,21 @@ Run the built-in health check to verify your setup: >
 The health check reports:
   - Whether snacks.nvim can be required
   - Whether the configured winter CLI is executable on PATH (and its version)
+  - Whether the delta renderer (`kokusenz/deltaview.nvim`) is installed and
+    whether its expected API functions are present. A "schema mismatch" warning
+    here means navigation and yank in |:WinterDiff| may be unavailable after
+    a deltaview.nvim update (check `delta.patch_diff` and related functions).
 
 ==============================================================================
 DEVELOPMENT                                                   *winter-development*
 
 Source layout: >
-  lua/winter/init.lua        -- public API: setup(), worktrees(), switch_to()
+  lua/winter/init.lua        -- public API: setup(), worktrees(), diff(), switch_to()
   lua/winter/config.lua      -- default config + validation
-  lua/winter/cli.lua         -- CLI invocation seam (build_argv, run)
-  lua/winter/workspace.lua   -- find_root() (pure root discovery)
+  lua/winter/cli.lua         -- CLI invocation seam (build_argv, run_async)
+  lua/winter/workspace.lua   -- find_root(), find_root_from_context()
   lua/winter/worktrees.lua   -- worktrees picker feature module
+  lua/winter/diff.lua        -- cross-repo diff viewer feature module
   lua/winter/session.lua     -- session_file() + switch_to() (pure helpers)
   lua/winter/health.lua      -- :checkhealth winter
   plugin/winter.lua          -- plugin file: guards, user commands

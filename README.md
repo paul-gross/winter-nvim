@@ -119,16 +119,66 @@ require("winter").setup({
 | Command | Description |
 |---|---|
 | `:WinterWorktrees [winter-args...]` | Open the worktrees picker |
-| `:Winter [worktrees] [winter-args...]` | Umbrella dispatcher; no args defaults to worktrees |
+| `:Winter [worktrees\|diff] [winter-args...]` | Umbrella dispatcher; no args defaults to worktrees |
+| `:WinterDiff[!] [env] [winter-args...]` | Open the cross-repo diff viewer for `env` (default: `alpha`) |
+
+### `:WinterDiff` — cross-repo feature diff viewer
+
+Opens the aggregated diff for a winter feature environment in the current window using the `delta` renderer from [kokusenz/deltaview.nvim](https://github.com/kokusenz/deltaview.nvim).
+
+```vim
+:WinterDiff              " branch diff for env alpha (config.diff.mode)
+:WinterDiff beta         " branch diff for env beta
+:WinterDiff!             " uncommitted working-tree diff for alpha (bang forces uncommitted)
+:WinterDiff! beta        " uncommitted diff for beta
+:WinterDiff gamma --winter=/home/me/ws/alpha/winter   " with per-invocation winter-args
+```
+
+The `[env]` argument is the first positional argument (default: `"alpha"`). Any arguments after `[env]` are passed as global winter args for that invocation, overriding `config.winter_args` — useful for targeting a dev CLI build.
+
+#### Buffer-local commands
+
+After opening, these commands are available on the diff buffer:
+
+| Command | Description |
+|---|---|
+| `:WinterDiffNextHunk` | Jump to next hunk |
+| `:WinterDiffPrevHunk` | Jump to previous hunk |
+| `:WinterDiffNextFile` | Jump to next file section |
+| `:WinterDiffPrevFile` | Jump to previous file section |
+| `:WinterDiffDrawer` | Open location-list file drawer |
+| `:WinterDiffRefresh` | Re-run diff in place (cursor position preserved) |
+| `:WinterDiffGotoFile` | Open source file at cursor line |
+| `:WinterDiffGotoFileSplit` | ...in a horizontal split |
+| `:WinterDiffGotoFileVSplit` | ...in a vertical split |
+| `:WinterDiffGotoFileTab` | ...in a new tab |
+| `:WinterDiffClose` | Close diff buffer and location-list |
+| `:WinterDiffYank` | Yank selection as Claude LLM context |
+
+#### Lua API
+
+```lua
+-- Open diff for env "alpha" (uses config.diff.mode)
+require("winter").diff()
+
+-- Open for a specific env and mode
+require("winter").diff({ env = "beta", mode = "uncommitted" })
+
+-- With a per-invocation winter_args override
+require("winter").diff({ env = "gamma", winter_args = { "--winter=/path/to/dev-cli" } })
+```
+
+An autocmd `User WinterDiffOpened` fires after render with `data = { buf, env }` — use it to bind buffer-local keymaps without the plugin imposing any defaults.
 
 ### Optional winter-args pass-through
 
-Both commands accept optional extra arguments that override `config.winter_args` for that single invocation. This is useful for targeting a development CLI build:
+All commands accept optional extra arguments that override `config.winter_args` for that single invocation. This is useful for targeting a development CLI build:
 
 ```vim
 " Use a specific winter-cli source tree (--winter=PATH must be first — the plugin handles ordering):
 :WinterWorktrees --winter=/home/me/ws/alpha/winter
 :Winter worktrees --winter=/home/me/ws/alpha/winter
+:WinterDiff beta --winter=/home/me/ws/alpha/winter
 ```
 
 Tab completion on `:Winter <Tab>` lists available subcommands.
@@ -257,6 +307,7 @@ Reports:
 
 - **snacks.nvim** — whether `require("snacks")` succeeds
 - **winter CLI** — whether the configured executable is on PATH and its version
+- **delta renderer** — whether `kokusenz/deltaview.nvim` is installed (required for `:WinterDiff`) and whether its expected API functions (`patch_diff`, `highlight_delta_artifacts`, `setup_delta_statuscolumn`, etc.) are present; a schema mismatch warning here means navigation and yank in `:WinterDiff` may be unavailable after a deltaview.nvim update
 
 ---
 
@@ -285,6 +336,7 @@ Tests are written with [mini.test](https://github.com/echasnovski/mini.nvim/blob
 
 The test suite covers:
 - `setup()` config merging and default preservation
+- `config.validate()` — per-field validation with correct error messages
 - `cli.build_argv()` — argument ordering (global args before subcommand)
 - `cli.run_async()` — injected callback-style fake runner driven synchronously
   (no real process needed)
@@ -293,6 +345,10 @@ The test suite covers:
 - `workspace.find_root()` — directory walking with a tmp filesystem fixture
 - `session.session_file()` — deterministic slugification
 - `worktrees()` — clean notification when outside a workspace
+- `diff.source_lines()` — line-map resolution, new/old fallback, multi-row min/max
+- `diff.file_at()` — file-title walking, "Line N" sub-header exclusion
+- `diff.compute_nav()` — file/hunk row extraction from delta metadata fixtures
+- `diff.open()` — async path via injected runner: correct argv, error notify, empty-diff notify
 
 ---
 

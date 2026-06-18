@@ -18,7 +18,17 @@ local subcommands = {
     require("winter").worktrees(opts)
   end,
   diff = function(args)
-    require("winter").diff({ env = args[1] })
+    -- First positional arg (if any) is the env; remaining args are winter_args.
+    local env = args[1]
+    local winter_args = {}
+    for i = 2, #args do
+      winter_args[#winter_args + 1] = args[i]
+    end
+    local opts = { env = env }
+    if #winter_args > 0 then
+      opts.winter_args = winter_args
+    end
+    require("winter").diff(opts)
   end,
 }
 
@@ -33,28 +43,32 @@ vim.api.nvim_create_user_command("WinterWorktrees", function(cmd_opts)
 end, {
   nargs = "*",
   desc = "Open the winter worktrees picker (optional: pass global winter args)",
-  complete = function()
-    return {}
-  end,
 })
 
--- :WinterDiff[!] [env]
+-- :WinterDiff[!] [env] [winter-args...]
 -- Opens the cross-repo feature diff for ENV (default "alpha"), replacing the
 -- buffer in the current window.
 -- With no bang: branch diff (HEAD vs main) via config.diff.mode.
 -- With bang (:WinterDiff!): uncommitted working-tree changes.
+-- Any args after [env] are passed as global winter args for this invocation,
+-- overriding config.winter_args (e.g. to target a dev CLI build).
 vim.api.nvim_create_user_command("WinterDiff", function(cmd_opts)
   local env = cmd_opts.fargs[1] or "alpha"
   -- bang forces uncommitted; otherwise nil lets M.open resolve cfg.diff.mode.
   local mode = cmd_opts.bang and "uncommitted" or nil
-  require("winter").diff({ env = env, mode = mode })
+  local winter_args = {}
+  for i = 2, #cmd_opts.fargs do
+    winter_args[#winter_args + 1] = cmd_opts.fargs[i]
+  end
+  local opts = { env = env, mode = mode }
+  if #winter_args > 0 then
+    opts.winter_args = winter_args
+  end
+  require("winter").diff(opts)
 end, {
-  nargs = "?",
+  nargs = "*",
   bang = true,
-  desc = "Open the cross-repo feature diff (! = uncommitted working tree)",
-  complete = function()
-    return {}
-  end,
+  desc = "Open the cross-repo feature diff (! = uncommitted working tree; optional: env [winter-args...])",
 })
 
 -- :Winter [subcommand] [winter-args...]

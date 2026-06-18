@@ -57,7 +57,10 @@ local STATE = "winter_diff"
 local function load_delta()
   local ok, delta = pcall(require, "delta")
   if not ok then
-    vim.notify("winter.diff: delta renderer not found. Install kokusenz/deltaview.nvim to use :WinterDiff.", vim.log.levels.ERROR)
+    vim.notify(
+      "winter.diff: delta renderer not found. Install kokusenz/deltaview.nvim to use :WinterDiff.",
+      vim.log.levels.ERROR
+    )
     return nil
   end
   return delta
@@ -100,9 +103,10 @@ end
 ---File titles come from `file_titles` (above). Hunk starts come from
 ---`b:delta_diff_data_set`, each hunk's first line carrying its rendered row in
 ---`formatted_diff_line_num` (0-based; +1 for the 1-based buffer line).
+---Exposed on M so tests can drive it against a hand-built vim.b[bufnr] fixture.
 ---@param bufnr integer
 ---@return integer[] files, integer[] hunks
-local function compute_nav(bufnr)
+function M.compute_nav(bufnr)
   local files, hunks = {}, {}
 
   for _, t in ipairs(file_titles(bufnr)) do
@@ -181,11 +185,27 @@ function M.prev_file()
 end
 
 ---Close the diff buffer and its location-list drawer.
+---
+--- Targets the diff buffer that was opened (the buffer carrying the winter_diff
+--- state), not whatever buffer happens to be current at call time (which may differ
+--- when called from a keymap while focus is in the loclist drawer).
 function M.close()
   pcall(vim.cmd, "lclose")
   local bufnr = vim.api.nvim_get_current_buf()
-  if vim.b[STATE] then
-    vim.api.nvim_buf_delete(bufnr, { force = true })
+  -- Prefer an explicit diff buffer: walk open windows for one that carries our
+  -- state, falling back to the current buffer when called directly from the diff.
+  local target = bufnr
+  if not vim.b[bufnr][STATE] then
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      local b = vim.api.nvim_win_get_buf(win)
+      if vim.b[b][STATE] then
+        target = b
+        break
+      end
+    end
+  end
+  if vim.b[target][STATE] then
+    vim.api.nvim_buf_delete(target, { force = true })
   end
 end
 
@@ -210,7 +230,8 @@ function M.drawer()
 end
 
 ---Re-run the diff that produced the current buffer (same env + mode), replacing
----it in place. Cursor restoration across a refresh is intentionally not done yet.
+---it in place. Cursor position and scroll (top line) are restored after re-render
+---via `winsaveview()` / `winrestview()`.
 function M.refresh()
   local state = vim.b[STATE]
   if not state then
@@ -237,10 +258,11 @@ end
 
 ---Find the file path (repo-prefixed) governing a buffer row by walking up to
 ---the nearest file-title artifact.
+---Exposed on M so tests can drive it against a hand-built vim.b[bufnr] fixture.
 ---@param bufnr integer
 ---@param row integer 1-based
 ---@return string|nil
-local function file_at(bufnr, row)
+function M.file_at(bufnr, row)
   local path
   for _, t in ipairs(file_titles(bufnr)) do
     if t.row <= row then
@@ -254,11 +276,12 @@ end
 
 ---Resolve the source line range (in the new file) for a buffer row range using
 ---`b:delta_line_map`. Removed lines fall back to their old line number.
+---Exposed on M so tests can drive it against a hand-built vim.b[bufnr] fixture.
 ---@param bufnr integer
 ---@param l1 integer
 ---@param l2 integer
 ---@return integer|nil lo, integer|nil hi
-local function source_lines(bufnr, l1, l2)
+function M.source_lines(bufnr, l1, l2)
   local map = vim.b[bufnr].delta_line_map or {}
   local lo, hi
   for r = l1, l2 do
@@ -287,8 +310,8 @@ function M.yank(opts)
   local l1 = opts.line1 or vim.api.nvim_win_get_cursor(0)[1]
   local l2 = opts.line2 or l1
 
-  local path = file_at(bufnr, l1) or "?"
-  local lo, hi = source_lines(bufnr, l1, l2)
+  local path = M.file_at(bufnr, l1) or "?"
+  local lo, hi = M.source_lines(bufnr, l1, l2)
   local span = lo and (lo == hi and tostring(lo) or (lo .. "-" .. hi)) or "?"
   local language = vim.filetype.match({ filename = path }) or vim.fn.fnamemodify(path, ":e")
   local content = table.concat(vim.api.nvim_buf_get_lines(bufnr, l1 - 1, l2, false), "\n")
@@ -316,13 +339,13 @@ function M.goto_file(open)
     return
   end
   local row = vim.api.nvim_win_get_cursor(0)[1]
-  local path = file_at(bufnr, row)
+  local path = M.file_at(bufnr, row)
   if not path then
     vim.notify("winter.diff: no file at cursor", vim.log.levels.WARN)
     return
   end
   local last = vim.api.nvim_buf_line_count(bufnr)
-  local target = source_lines(bufnr, row, math.min(row + 40, last)) or 1
+  local target = M.source_lines(bufnr, row, math.min(row + 40, last)) or 1
   local abs = ("%s/%s/%s"):format(state.root, state.env, path)
   local opener = ({ edit = "edit", split = "split", vsplit = "vsplit", tabedit = "tabedit" })[open] or "edit"
   vim.cmd(opener .. " " .. vim.fn.fnameescape(abs))
@@ -419,7 +442,26 @@ local function render(diffstring, env, mode, cfg, root, restore_view)
   vim.bo[bufnr].readonly = true
   vim.bo[bufnr].modified = false
 
-  local files, hunks = compute_nav(bufnr)
+  local files, hunks = M.compute_nav(bufnr)
+
+  -- Warn once when the diff is non-empty but delta metadata is absent — this
+  -- indicates a delta private-schema change (field rename / removal) that makes
+  -- navigation and yank degrade to no-ops rather than error visibly.
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  if line_count > 0 and #files == 0 and #hunks == 0 then
+    local warned_key = "winter_diff_schema_warn"
+    if not vim.g[warned_key] then
+      vim.g[warned_key] = true
+      vim.notify(
+        "winter.diff: delta metadata is empty for a non-empty diff — "
+          .. "navigation and yank may be unavailable. "
+          .. "This usually means deltaview.nvim was updated and its internal schema changed. "
+          .. "Check b:delta_artifacts and b:delta_diff_data_set in the diff buffer.",
+        vim.log.levels.WARN
+      )
+    end
+  end
+
   vim.b[bufnr][STATE] = { env = env, mode = mode, root = root, files = files, hunks = hunks }
   register_commands(bufnr)
 
@@ -445,8 +487,9 @@ end
 --- current window (see the module header for why it is just a buffer).
 ---
 ---@param cfg Winter.Config plugin configuration
----@param opts? { env?: string, mode?: string, restore_view?: table } env (default "alpha"); mode ("branch"|"uncommitted"|"staged", default cfg.diff.mode); restore_view is an internal winsaveview() table reapplied after render (used by refresh)
-function M.open(cfg, opts)
+---@param opts? { env?: string, mode?: string, winter_args?: string[], restore_view?: table } env (default "alpha"); mode ("branch"|"uncommitted"|"staged", default cfg.diff.mode); winter_args overrides cfg.winter_args for this invocation (e.g. to target a dev CLI build); restore_view is an internal winsaveview() table reapplied after render (used by refresh)
+---@param runner? fun(argv: string[], cwd: string, on_exit: fun(result: table)) injectable CLI runner for unit tests (same contract as cli.run_async's runner param)
+function M.open(cfg, opts, runner)
   opts = opts or {}
   local env = opts.env or "alpha"
   -- Single source of truth for the mode default, so :WinterDiff, :Winter diff,
@@ -467,13 +510,14 @@ function M.open(cfg, opts)
     return
   end
 
-  local root = workspace.find_root(vim.fn.getcwd()) or workspace.find_root(vim.fn.expand("%:p"))
+  local root = workspace.find_root_from_context()
   if not root then
     vim.notify("winter.diff: not inside a winter workspace", vim.log.levels.ERROR)
     return
   end
 
-  cli.run_async(root, cfg, cfg.winter_args, M.diff_args(env, mode), function(result, err)
+  local effective_global_args = opts.winter_args or cfg.winter_args or {}
+  cli.run_async(root, cfg, effective_global_args, M.diff_args(env, mode), function(result, err)
     vim.schedule(function()
       if err then
         vim.notify("winter.diff: " .. err, vim.log.levels.ERROR)
@@ -486,7 +530,7 @@ function M.open(cfg, opts)
       end
       render(diffstring, env, mode, cfg, root, opts.restore_view)
     end)
-  end)
+  end, runner)
 end
 
 return M
