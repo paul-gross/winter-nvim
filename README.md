@@ -109,6 +109,23 @@ require("winter").setup({
     -- If set, maps this key in normal mode to open the worktrees picker.
     open = nil,  -- string | nil  e.g. "<leader>fw"
   },
+
+  -- Configuration for the cross-repo diff viewer (:WinterDiff).
+  diff = {
+    -- Default mode: "branch" (commits ahead of origin), "uncommitted" (working tree), or "staged".
+    mode = "branch",  -- string
+
+    -- Auto-open the location-list file drawer after :WinterDiff renders.
+    -- false = summon on demand with :WinterDiffDrawer (it is a window split).
+    drawer = false,  -- boolean
+
+    -- Registers that :WinterDiffYank writes the Claude context snippet to.
+    yank_registers = { "+", '"' },  -- string[]
+
+    -- Custom formatter for :WinterDiffYank output. nil uses the built-in Claude xml format.
+    -- fun(ctx: { path: string, lines: string, language: string, content: string }): string
+    yank_format = nil,  -- function | nil
+  },
 })
 ```
 
@@ -292,6 +309,8 @@ winter.nvim uses a feature-module architecture: each integration lives in
 point in `lua/winter/init.lua` and a `:Winter <feature>` subcommand in
 `plugin/winter.lua`. Adding a second feature (e.g. a dashboard) is a clean,
 obvious addition to each of those three files.
+
+See [ai/patterns.md](./ai/patterns.md) for the implicit conventions every feature module follows (async-via-cli-seam, pcall-wrap-Ex-commands, degrade-don't-error, feature module shape, and root discovery).
 
 Planned integrations: dashboard equivalent of the winter TUI, and more.
 

@@ -240,7 +240,7 @@ function M.refresh()
   -- Capture cursor line/col + topline (scroll) so the re-rendered diff restores
   -- both the cursor position and the top of the buffer by line number.
   local view = vim.fn.winsaveview()
-  M.open(require("winter").config, { env = state.env, mode = state.mode, restore_view = view })
+  M.open(require("winter").config, { env = state.env, mode = state.mode, winter_args = state.winter_args, restore_view = view })
 end
 
 ---Default Claude-context formatter (matches prompt-yank's "claude" xml preset).
@@ -389,8 +389,9 @@ end
 ---@param cfg Winter.Config
 ---@param mode string the diff mode used (stored so :WinterDiffRefresh can replay it)
 ---@param root string workspace root (used to resolve <root>/<env>/<path> for goto_file)
+---@param winter_args? string[] per-invocation winter_args override (nil = use cfg.winter_args on refresh)
 ---@param restore_view? table a vim.fn.winsaveview() table to reapply after render (refresh)
-local function render(diffstring, env, mode, cfg, root, restore_view)
+local function render(diffstring, env, mode, cfg, root, winter_args, restore_view)
   local delta = load_delta()
   if not delta then
     return
@@ -462,7 +463,7 @@ local function render(diffstring, env, mode, cfg, root, restore_view)
     end
   end
 
-  vim.b[bufnr][STATE] = { env = env, mode = mode, root = root, files = files, hunks = hunks }
+  vim.b[bufnr][STATE] = { env = env, mode = mode, root = root, winter_args = winter_args, files = files, hunks = hunks }
   register_commands(bufnr)
 
   -- The drawer is a window split, so it is opt-in (config.diff.drawer or the
@@ -528,7 +529,7 @@ function M.open(cfg, opts, runner)
         vim.notify(("winter.diff: %s has no changes (%s)"):format(env, mode), vim.log.levels.INFO)
         return
       end
-      render(diffstring, env, mode, cfg, root, opts.restore_view)
+      render(diffstring, env, mode, cfg, root, opts.winter_args, opts.restore_view)
     end)
   end, runner)
 end
