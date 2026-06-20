@@ -240,7 +240,10 @@ function M.refresh()
   -- Capture cursor line/col + topline (scroll) so the re-rendered diff restores
   -- both the cursor position and the top of the buffer by line number.
   local view = vim.fn.winsaveview()
-  M.open(require("winter").config, { env = state.env, mode = state.mode, winter_args = state.winter_args, restore_view = view })
+  M.open(
+    require("winter").config,
+    { env = state.env, mode = state.mode, winter_args = state.winter_args, restore_view = view }
+  )
 end
 
 ---Default Claude-context formatter (matches prompt-yank's "claude" xml preset).
