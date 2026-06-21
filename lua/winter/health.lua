@@ -37,14 +37,9 @@ function M.check()
 
   -- 2. winter CLI on PATH (using the configured executable)
   if vim.fn.executable(winter_cmd) == 1 then
-    local handle = io.popen(winter_cmd .. " --version 2>&1")
-    if handle then
-      local version = handle:read("*l") or "(unknown version)"
-      handle:close()
-      vim.health.ok(("winter CLI found (%s): %s"):format(winter_cmd, version))
-    else
-      vim.health.ok(("winter CLI is on PATH (%s)"):format(winter_cmd))
-    end
+    local result = vim.system({ winter_cmd, "--version" }):wait()
+    local version = vim.trim(result.stdout or result.stderr or ""):match("^([^\n]+)") or "(unknown version)"
+    vim.health.ok(("winter CLI found (%s): %s"):format(winter_cmd, version))
   else
     vim.health.error(
       ("winter CLI not found (looked for %q)"):format(winter_cmd),

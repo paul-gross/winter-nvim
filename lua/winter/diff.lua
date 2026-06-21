@@ -190,19 +190,32 @@ end
 --- state), not whatever buffer happens to be current at call time (which may differ
 --- when called from a keymap while focus is in the loclist drawer).
 function M.close()
-  pcall(vim.cmd, "lclose")
   local bufnr = vim.api.nvim_get_current_buf()
-  -- Prefer an explicit diff buffer: walk open windows for one that carries our
+  -- Prefer an explicit diff window: walk open windows for one that carries our
   -- state, falling back to the current buffer when called directly from the diff.
+  local diff_win = nil
   local target = bufnr
-  if not vim.b[bufnr][STATE] then
+  if vim.b[bufnr][STATE] then
+    diff_win = vim.api.nvim_get_current_win()
+  else
     for _, win in ipairs(vim.api.nvim_list_wins()) do
       local b = vim.api.nvim_win_get_buf(win)
       if vim.b[b][STATE] then
+        diff_win = win
         target = b
         break
       end
     end
+  end
+  -- Close the loclist from the diff window's context so the loclist drawer
+  -- that belongs to that window is closed (not the current window's loclist,
+  -- which may be the loclist drawer itself when called from there).
+  if diff_win then
+    pcall(vim.api.nvim_win_call, diff_win, function()
+      pcall(vim.cmd, "lclose")
+    end)
+  else
+    pcall(vim.cmd, "lclose")
   end
   if vim.b[target][STATE] then
     vim.api.nvim_buf_delete(target, { force = true })
@@ -347,8 +360,7 @@ function M.goto_file(open)
     vim.notify("winter.diff: no file at cursor", vim.log.levels.WARN)
     return
   end
-  local last = vim.api.nvim_buf_line_count(bufnr)
-  local target = M.source_lines(bufnr, row, math.min(row + 40, last)) or 1
+  local target = M.source_lines(bufnr, row, row) or 1
   local abs = ("%s/%s/%s"):format(state.root, state.env, path)
   local opener = ({ edit = "edit", split = "split", vsplit = "vsplit", tabedit = "tabedit" })[open] or "edit"
   vim.cmd(opener .. " " .. vim.fn.fnameescape(abs))
