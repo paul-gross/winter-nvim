@@ -572,7 +572,11 @@ function M.build_grid(status)
     local PIN_GLYPH = ">"
     local PIN_PAD = " " -- same byte width, for alignment
 
-    local repo_col_w = 4 -- minimum
+    -- Minimum repo-label column width: 40, matching the TUI's
+    -- `f"{'Repositories':<40}"` header floor (feature_worktrees.py) so the
+    -- Neovim grid lines up with the Textual dashboard. Grows past 40 to fit
+    -- any longer repo label.
+    local repo_col_w = 40 -- minimum (TUI parity)
     for _, repo in ipairs(repo_order) do
       local w = #repo + 2 -- 2 = pin glyph + space
       if w > repo_col_w then
@@ -618,9 +622,10 @@ function M.build_grid(status)
           w = #ct
         end
       end
-      -- Minimum column width of 6.
-      if w < 6 then
-        w = 6
+      -- Minimum env column width: 12, matching the TUI's `{title:<12}`
+      -- column-header floor (feature_worktrees.py) for visual parity.
+      if w < 12 then
+        w = 12
       end
       env_col_w[ename] = w
     end
