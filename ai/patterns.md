@@ -22,26 +22,40 @@ The pattern is: try the operation, silently ignore a failure or emit a WARN noti
 
 ## degrade-don't-error
 
-When an optional dependency (delta renderer) or optional metadata (delta schema fields) is absent, the plugin degrades to a reduced capability rather than raising an error.
+When an optional dependency is absent, the plugin degrades to a reduced capability rather than raising an error.
 
-- Missing delta renderer → `load_delta()` notifies with ERROR and returns `nil`. The caller returns early; no crash.
-- Missing delta metadata (empty `b:delta_artifacts` / `b:delta_diff_data_set`) → navigation and yank return no-ops. A one-time WARN fires the first time a non-empty diff has empty metadata (global flag `vim.g.winter_diff_schema_warn` prevents spam).
-- `health.lua` probes the delta API at `:checkhealth` time so schema mismatches are surfaced before the user opens a diff.
+- Missing codediff renderer → `load_codediff()` notifies with ERROR and returns `nil`. The caller returns early; no crash.
+- `health.lua` probes the codediff API at `:checkhealth` time so mismatches are surfaced before the user opens a diff.
 
 ## feature module shape
 
 Each integration lives in `lua/winter/<feature>.lua` and follows:
 
 - `M.open(cfg, opts, runner?)` — the primary entry point, takes the plugin config and an options table. The optional `runner` argument is the injected CLI runner for tests.
-- Pure helpers (arg builders, formatters, parsers) are exposed directly on `M` so they can be unit-tested without touching the UI. Examples: `diff.diff_args`, `diff.default_format`, `diff.source_lines`, `diff.file_at`, `diff.compute_nav`.
-- Buffer-local state is stored in `vim.b[bufnr][STATE_KEY]` where `STATE_KEY` is a module-local string constant (e.g. `"winter_diff"`).
-- A `User WinterFeatureOpened` autocmd fires after render so callers can attach buffer-local keymaps without the plugin forcing any.
+- Pure helpers (arg builders, parsers) are exposed directly on `M` so they can be unit-tested without touching the UI. Examples: `diff.build_specs`, `diff.build_roots`.
+- Module-level state is stored in local variables (e.g. `_last_status` in dashboard.lua for status caching); buffer-local state goes in `vim.b[bufnr][STATE_KEY]`.
+- Each feature fires a namespaced `User Winter<Feature>*` autocmd after render so callers can attach keymaps or react without the plugin forcing any. Actual events: `WinterDiffOpened`, `WinterDashboardOpened`, `WinterDashboardRefreshed`, `WinterDashboardSelectionChanged`.
 
 ## root discovery
 
-Both the worktrees and diff features share `workspace.find_root_from_context()`:
+All feature modules share `workspace.find_root_from_context()`:
 
 1. Tries the current buffer's file directory (`nvim_buf_get_name(0)` → `fnamemodify(:p:h)`).
 2. Falls back to `vim.fn.getcwd()` for unnamed / scratch buffers.
 
 The root is the first ancestor directory containing a `.winter/` directory. This matches the winter CLI's own convention — no `tools/winter-cli/` or `config.toml` required.
+
+## CLI contract
+
+The dashboard's correctness is coupled to the `winter ws status --json` output at `schema_version: 1`. The specific fields consumed are:
+
+| Field | Used for |
+|---|---|
+| `wt.main_branch` | gate for cyan/orange tracking markers (diverged vs upstream) |
+| `wt.upstream` | same gate — compared against `"origin/" .. main_branch` |
+| `wt.tracking_ahead` / `wt.tracking_behind` | divergence indicator `[+A,-B]` |
+| `wt.tracking_ref_present` | unborn-upstream indicator `[+]` |
+| `env.extensions` | badge values rendered in `WinterDashBadge` |
+| `status.dashboard.resolved_layout` | layout orientation (`"repos-as-rows"` or future values) |
+
+See `workspace:/ai/winter-cli/usage/ws/status.md` for the full `ws status --json` wire contract. When the CLI schema changes, re-verify these field paths before shipping.

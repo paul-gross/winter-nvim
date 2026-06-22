@@ -5,7 +5,8 @@
 --- Checks performed:
 ---   1. snacks.nvim can be required (folke/snacks.nvim must be installed)
 ---   2. The configured winter CLI executable is on PATH
----   3. the `delta` renderer can be required (optional; required only for :WinterDiff)
+---   3. codediff.nvim can be required and its expected API functions exist
+---      (optional; required only for :WinterDiff and dashboard quick-diffs)
 ---@brief ]]
 
 local M = {}
@@ -47,31 +48,28 @@ function M.check()
     )
   end
 
-  -- 3. delta renderer availability and schema check (only needed for :WinterDiff)
-  local ok_delta, delta = pcall(require, "delta")
-  if ok_delta then
-    -- Probe the private fields that diff.lua reads. A schema change (field
-    -- rename / removal) in deltaview.nvim would silently break navigation and
-    -- yank; surface it here instead.
-    local schema_ok = type(delta.patch_diff) == "function"
-      and type(delta.highlight_delta_artifacts) == "function"
-      and type(delta.syntax_highlight_diff_set) == "function"
-      and type(delta.diff_highlight_diff) == "function"
-      and type(delta.setup_delta_statuscolumn) == "function"
-    if schema_ok then
-      vim.health.ok("delta renderer is available (:WinterDiff) and expected API is present")
+  -- 3. codediff.nvim availability and API check (only needed for :WinterDiff and dashboard quick-diffs)
+  local ok_codediff, codediff = pcall(require, "codediff")
+  if ok_codediff then
+    local api_ok = type(codediff.diff_repos) == "function"
+      and type(codediff.diff_repos_uncommitted) == "function"
+      and type(codediff.next_hunk) == "function"
+      and type(codediff.prev_hunk) == "function"
+      and type(codediff.next_file) == "function"
+      and type(codediff.prev_file) == "function"
+    if api_ok then
+      vim.health.ok("codediff.nvim is available (:WinterDiff, dashboard quick-diffs) and expected API is present")
     else
       vim.health.warn(
-        "delta renderer is available but expected API functions are missing",
-        "deltaview.nvim may have been updated with a breaking schema change. "
-          .. "Navigation and yank in :WinterDiff may not work. "
-          .. "Check delta.patch_diff, delta.highlight_delta_artifacts, delta.setup_delta_statuscolumn."
+        "codediff.nvim is available but expected API functions are missing",
+        "paul-gross/codediff.nvim may have been updated with a breaking change. "
+          .. "Check codediff.diff_repos, codediff.diff_repos_uncommitted, codediff.next_hunk, etc."
       )
     end
   else
     vim.health.warn(
-      "delta renderer is not available",
-      "Install kokusenz/deltaview.nvim (it ships the `delta` module) to use the :WinterDiff cross-repo diff viewer"
+      "codediff.nvim is not available",
+      "Install paul-gross/codediff.nvim to use :WinterDiff and dashboard quick-diffs"
     )
   end
 end

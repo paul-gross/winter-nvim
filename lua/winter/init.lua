@@ -1,19 +1,23 @@
 ---@mod winter winter.nvim — Neovim integration for winter workspaces
 ---@brief [[
 --- winter.nvim provides rich editor integration with winter workspaces.
---- The first integration is a snacks.nvim worktrees picker: fuzzy-find any
---- `<env>/<repo>` feature-environment worktree or standalone repository and
---- jump Neovim's working directory into it, restoring a saved session if one
---- exists. More integrations (e.g. a dashboard) are planned.
+--- Three integrated features:
+---   - Worktrees picker: snacks.nvim fuzzy-find over every env/repo worktree
+---     and standalone repository; jump Neovim into it, restoring a session.
+---   - Workspace status dashboard: persistent toggle-able panel with
+---     env×repo git state, hjkl navigation, and quick-diffs via codediff.
+---   - Cross-repo diff viewer: aggregated multi-repo feature diff via
+---     codediff.nvim (branch/uncommitted/staged variants).
 ---
 --- Feature modules live under lua/winter/<feature>.lua. Adding a new feature
---- (e.g. a dashboard) means adding lua/winter/dashboard.lua and a
---- `M.dashboard(opts?)` entry point here — one line each.
+--- means adding lua/winter/<feature>.lua and a `M.<feature>(opts?)` entry
+--- point here — one line each.
 ---
 --- Requires:
 ---   - Neovim >= 0.10
----   - folke/snacks.nvim
+---   - folke/snacks.nvim (required)
 ---   - winter CLI on PATH (https://github.com/paul-gross/winter)
+---   - paul-gross/codediff.nvim (optional — diff features)
 ---@brief ]]
 
 local config_module = require("winter.config")
@@ -63,14 +67,74 @@ function M.worktrees(opts)
   require("winter.worktrees").open(M.config, opts)
 end
 
----Open the cross-repo feature diff viewer for an environment.
+---Open the cross-repo feature diff viewer for an environment via codediff.nvim.
 ---
---- Fetches the aggregated `winter ws diff <env>` stream and renders every repo's
---- changes in one delta-rendered buffer. See |winter.diff|.
+--- Resolves worktree roots and git revisions from `winter ws status --json`,
+--- then opens codediff's multi-repo explorer in a new tab. See |winter.diff|.
 ---
----@param opts? { env?: string, mode?: string } env (default "alpha") and mode ("branch"|"uncommitted"|"staged")
+---@param opts? { env?: string, repo?: string, mode?: string, winter_args?: string[], status?: table } env (default "alpha"); repo (optional single-repo scope); mode ("branch"|"uncommitted"|"staged")
 function M.diff(opts)
   require("winter.diff").open(M.config, opts)
+end
+
+---Toggle the persistent workspace status dashboard.
+---
+--- Opens the dashboard in a window when hidden; closes the window (buffer stays
+--- alive in the background) when visible. Refreshes asynchronously via
+--- `winter ws status --json` on open and periodically thereafter.
+---
+---@param opts? { winter_args?: string[] } per-invocation overrides
+function M.dashboard(opts)
+  require("winter.dashboard").open(M.config, opts)
+end
+
+---Refresh the dashboard immediately if it is currently open.
+---
+--- Triggers an async `winter ws status --json` fetch and re-renders the
+--- dashboard buffer. If the dashboard is not open this is a no-op (the
+--- module-level guard in dashboard.refresh handles it silently).
+--- Fires `User WinterDashboardRefreshed` after the render completes.
+function M.dashboard_refresh()
+  require("winter.dashboard").refresh(M.config)
+end
+
+---Return the current dashboard selection, or nil if the dashboard has not been
+--- rendered or has no navigable cells.
+---
+--- The returned table contains the same fields as `dashboard.get_selection`:
+--- `kind`, `env`, `repo`, `row`, `col` (row/col are 1-based grid indices).
+---
+---@return { kind: string, env: string|nil, repo: string|nil, row: integer, col: integer }|nil
+function M.dashboard_selection()
+  return require("winter.dashboard").get_selection()
+end
+
+---Open a diff for the current dashboard selection using codediff.nvim.
+---
+--- Resolves the env (and optionally the repo) from the dashboard's current
+--- selection, then opens the diff in a new codediff tab.
+---
+---@param opts? { scope?: "repo"|"env", mode?: "branch"|"uncommitted"|"staged" } scope (default "repo"), mode (default "branch")
+function M.dashboard_diff(opts)
+  opts = opts or {}
+  local scope = opts.scope or "repo"
+  local mode = opts.mode or "branch"
+
+  local sel = M.dashboard_selection()
+  if not sel then
+    vim.notify("winter.nvim: no dashboard selection", vim.log.levels.WARN)
+    return
+  end
+
+  local diff_opts = {
+    env = sel.env,
+    mode = mode,
+  }
+  if scope == "repo" and sel.repo then
+    diff_opts.repo = sel.repo
+  end
+
+  require("winter.diff").open(M.config, diff_opts)
 end
 
 ---Switch Neovim into `path`, loading an existing session or creating a new one.

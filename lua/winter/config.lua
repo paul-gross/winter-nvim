@@ -8,15 +8,20 @@
 ---@field session_dir string Directory where session files are stored
 ---@field cd_command string Vim cd command scope: "cd" | "tcd" | "lcd" (default: "cd")
 ---@field diff Winter.DiffConfig Cross-repo feature diff viewer (see winter.diff)
+---@field dashboard Winter.DashboardConfig Dashboard window layout (see winter.dashboard)
+
+---@class Winter.DashboardConfig
+---@field position? string Window position: "bottom"|"top"|"left"|"right"|"float" (default: "bottom")
+---@field size? number|table<string,number> Window size. Integer = lines/cols for dock; 0<n<1 = fraction. For "float": {width=n, height=n}. (default: 15)
+---@field border? string Border style for "float" position (any snacks border string, e.g. "rounded", "single", "double"). (default: "rounded")
+---@field title? string Window title string shown in the border. nil disables. (default: " Winter ")
 
 ---@class Winter.PickerConfig
 ---@field layout? string snacks.nvim layout name (e.g. "default", "ivy", "telescope")
 
 ---@class Winter.DiffConfig
----@field mode string Default mode for :WinterDiff: "branch" | "uncommitted" | "staged" (default: "branch")
----@field drawer boolean Auto-open the location-list file drawer on open (default: false; it is a window split — summon on demand with :WinterDiffDrawer)
----@field yank_registers string[] Registers :WinterDiffYank writes to (default: { "+", '"' })
----@field yank_format? fun(ctx: { path: string, lines: string, language: string, content: string }): string Optional override for the yank text; nil uses the built-in Claude xml format
+---@field mode string Default mode for :WinterDiff: "branch" | "uncommitted" | "staged" (default: "branch"). staged routes to the uncommitted explorer (codediff has no pure staged-only multi-repo API); the explorer shows a "Staged Changes" group within the view.
+---@field layout? string Optional codediff layout override: "inline" | "side-by-side". nil uses codediff's default.
 
 ---@class Winter.KeymapConfig
 ---@field open? string If set, maps this key to :WinterWorktrees in normal mode (e.g. "<leader>fw")
@@ -39,9 +44,13 @@ M.defaults = {
   cd_command = "cd",
   diff = {
     mode = "branch",
-    drawer = false,
-    yank_registers = { "+", '"' },
-    yank_format = nil,
+    layout = nil,
+  },
+  dashboard = {
+    position = "bottom",
+    size = 15,
+    border = "rounded",
+    title = " Winter ",
   },
 }
 
@@ -72,14 +81,19 @@ function M.validate(opts)
 
   if opts.diff then
     _validate("diff.mode", opts.diff.mode, "string", true)
-    _validate("diff.drawer", opts.diff.drawer, "boolean", true)
-    _validate("diff.yank_registers", opts.diff.yank_registers, "table", true)
-    _validate("diff.yank_format", opts.diff.yank_format, "function", true)
+    _validate("diff.layout", opts.diff.layout, "string", true)
 
     if opts.diff.mode ~= nil then
       local valid = { branch = true, uncommitted = true, staged = true }
       if not valid[opts.diff.mode] then
         error(("winter.nvim: diff.mode must be one of branch|uncommitted|staged, got %q"):format(opts.diff.mode), 2)
+      end
+    end
+
+    if opts.diff.layout ~= nil then
+      local valid_layouts = { inline = true, ["side-by-side"] = true }
+      if not valid_layouts[opts.diff.layout] then
+        error(("winter.nvim: diff.layout must be one of inline|side-by-side, got %q"):format(opts.diff.layout), 2)
       end
     end
   end
@@ -98,6 +112,42 @@ function M.validate(opts)
 
   if opts.keymaps then
     _validate("keymaps.open", opts.keymaps.open, "string", true)
+  end
+
+  _validate("dashboard", opts.dashboard, "table", true)
+
+  if opts.dashboard then
+    local d = opts.dashboard
+    _validate("dashboard.position", d.position, "string", true)
+    _validate("dashboard.border", d.border, "string", true)
+    _validate("dashboard.title", d.title, "string", true)
+
+    if d.position ~= nil then
+      local valid_positions = { bottom = true, top = true, left = true, right = true, float = true }
+      if not valid_positions[d.position] then
+        error(
+          ("winter.nvim: dashboard.position must be one of bottom|top|left|right|float, got %q"):format(d.position),
+          2
+        )
+      end
+    end
+
+    if d.size ~= nil then
+      local size_ok = false
+      if type(d.size) == "number" then
+        -- integer lines/cols or fraction 0 < n < 1; must be positive
+        size_ok = d.size > 0
+      elseif type(d.size) == "table" then
+        -- float: { width = <number>, height = <number> }
+        size_ok = type(d.size.width) == "number"
+          and type(d.size.height) == "number"
+          and d.size.width > 0
+          and d.size.height > 0
+      end
+      if not size_ok then
+        error("winter.nvim: dashboard.size must be a positive number or {width=number, height=number}", 2)
+      end
+    end
   end
 end
 

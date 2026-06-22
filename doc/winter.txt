@@ -14,22 +14,29 @@ CONTENTS                                                        *winter-contents
   5. Configuration .................................... |winter-config|
   6. Commands ......................................... |winter-commands|
   7. Diff viewer ....................................... |winter-diff|
-  8. Lua API ........................................... |winter-api|
-  9. Session behaviour ................................. |winter-sessions|
- 10. Health check ..................................... |winter-health|
- 11. Development ...................................... |winter-development|
+  8. Dashboard ........................................ |winter-dashboard|
+  9. Lua API ........................................... |winter-api|
+ 10. Session behaviour ................................. |winter-sessions|
+ 11. Health check ..................................... |winter-health|
+ 12. Development ...................................... |winter-development|
 
 ==============================================================================
 INTRODUCTION                                                      *winter-intro*
 
 winter.nvim provides rich editor integration with winter workspaces
-(https://github.com/paul-gross/winter). The first integration is a
-snacks.nvim worktrees picker: fuzzy-find any `<env>/<repo>` feature-
-environment worktree or standalone repository and switch Neovim's working
-directory into it, preferring a saved Neovim session for the target over a
-bare `:cd`. More integrations (e.g. a dashboard) are planned.
+(https://github.com/paul-gross/winter). Three integrated features are
+included:
 
-Data is sourced by shelling out to: >
+  - Worktrees picker — snacks.nvim fuzzy-finder over every `<env>/<repo>`
+    feature-environment worktree and standalone repository; jump Neovim's
+    working directory into it, restoring a saved session if one exists.
+  - Workspace status dashboard — a persistent toggle-able panel showing all
+    feature-environment worktrees and their git state, with hjkl navigation
+    and quick-diffs openable in a new tab.
+  - Cross-repo diff viewer — aggregated multi-repo feature diff via
+    paul-gross/codediff.nvim with branch/uncommitted/staged variants.
+
+Data for the worktrees picker is sourced by shelling out to: >
   winter [global-args] ws worktrees --json
 <
 The command returns a JSON array of worktree descriptors; each element has
@@ -37,8 +44,11 @@ these keys: `kind` ("worktree" or "standalone"), `env`, `repo`, `name`,
 `label`, and `path` (absolute). The `label` field (e.g. "alpha/winter" or
 "winter-harness") is what the fuzzy matcher operates on.
 
-When invoked outside of a winter workspace (no `.winter/config.toml` +
-`tools/winter-cli/` ancestor found), the plugin emits: >
+The dashboard calls `winter ws status --json` asynchronously, parses the
+result, and renders the env×repo grid in a persistent `nofile` buffer.
+
+When invoked outside of a winter workspace (no `.winter/config.toml`
+ancestor found), the plugin emits: >
   winter.nvim: not inside a winter workspace
 <
 and returns without opening a picker or raising an error.
@@ -47,8 +57,11 @@ and returns without opening a picker or raising an error.
 REQUIREMENTS                                                *winter-requirements*
 
   - Neovim >= 0.10  (vim.system, used to invoke the winter CLI, requires 0.10)
-  - folke/snacks.nvim  (https://github.com/folke/snacks.nvim)
-  - winter CLI on PATH (https://github.com/paul-gross/winter)
+  - folke/snacks.nvim  (https://github.com/folke/snacks.nvim) — required
+    (worktrees picker + dashboard window via Snacks.win)
+  - winter CLI on PATH (https://github.com/paul-gross/winter) — required
+  - paul-gross/codediff.nvim (optional — required for :WinterDiff and dashboard
+    quick-diffs; https://github.com/paul-gross/codediff.nvim)
 
 Run |:checkhealth| winter to confirm all requirements are met.
 
@@ -58,11 +71,15 @@ INSTALLATION                                                *winter-installation
 With lazy.nvim: >lua
   {
     "paul-gross/winter-nvim",
-    dependencies = { "folke/snacks.nvim" },
+    dependencies = {
+      "folke/snacks.nvim",           -- required
+      "paul-gross/codediff.nvim",    -- optional (diff features)
+    },
     opts = {},
-    -- optional keymap:
+    -- optional keymaps (entry-point keymaps are the USER's responsibility):
     -- keys = {
     --   { "<leader>fw", "<cmd>WinterWorktrees<cr>", desc = "Winter: find workspace" },
+    --   { "<leader>fd", "<cmd>WinterDashboard<cr>", desc = "Winter: workspace dashboard" },
     -- },
   }
 <
@@ -70,7 +87,10 @@ With lazy.nvim: >lua
 With packer.nvim: >lua
   use {
     "paul-gross/winter-nvim",
-    requires = { "folke/snacks.nvim" },
+    requires = {
+      "folke/snacks.nvim",           -- required
+      "paul-gross/codediff.nvim",    -- optional (diff features)
+    },
     config = function()
       require("winter").setup()
     end,
@@ -144,6 +164,35 @@ Default configuration: >lua
       -- If set, maps this key in normal mode to open the worktrees picker.
       open = nil,                          -- string | nil  e.g. "<leader>fw"
     },
+
+    -- Cross-repo diff viewer options (used by :WinterDiff / dashboard quick-diffs).
+    diff = {
+      -- Default mode when no explicit mode is given.
+      -- "branch"      — committed diff (HEAD vs origin/<main_branch>)
+      -- "uncommitted" — working-tree staged+unstaged+conflicts
+      -- "staged"      — routes to uncommitted explorer (codediff has no pure staged API)
+      mode = "branch",                     -- string
+
+      -- Optional codediff layout override. nil uses codediff's default.
+      -- "inline" or "side-by-side" (values accepted by codediff.nvim)
+      layout = nil,                        -- string | nil
+    },
+
+    -- Dashboard window layout options.
+    dashboard = {
+      -- Window position: "bottom" | "top" | "left" | "right" | "float"
+      position = "bottom",                 -- string
+
+      -- Window size. Integer = lines/cols for docks; 0<n<1 = fraction.
+      -- For "float": { width = <number>, height = <number> }
+      size = 15,                           -- number | table
+
+      -- Border style for "float" position (any snacks border string).
+      border = "rounded",                  -- string
+
+      -- Window title string shown in the border. nil disables.
+      title = " Winter ",                  -- string | nil
+    },
   })
 <
 
@@ -167,8 +216,10 @@ COMMANDS                                                        *winter-commands
   defaults to the worktrees picker. Tab-completes available subcommands.
 
   Subcommands:
-    worktrees [winter-args...]   Open the worktrees picker (see |:WinterWorktrees|)
-    diff [env] [winter-args...]  Open the cross-repo diff viewer (see |:WinterDiff|)
+    worktrees [winter-args...]        Open the worktrees picker (see |:WinterWorktrees|)
+    diff [env] [--repo n] [args...]   Open the cross-repo diff viewer (see |:WinterDiff|)
+    dashboard [winter-args...]        Toggle the dashboard (see |:WinterDashboard|)
+    refresh                           Refresh the dashboard (see |:WinterRefresh|)
 
   Unknown subcommand: emits an ERROR notification listing available subcommands.
 
@@ -177,56 +228,112 @@ COMMANDS                                                        *winter-commands
     :Winter worktrees            " same
     :Winter diff                 " diff for env alpha
     :Winter diff beta            " diff for env beta
+    :Winter dashboard            " toggle dashboard
     :Winter worktrees --winter=/home/me/ws/alpha/winter
 <
 
 ==============================================================================
 DIFF VIEWER                                                        *winter-diff*
 
-Requires `kokusenz/deltaview.nvim` (the `delta` Lua module) on the runtimepath.
-Run |:checkhealth| winter to verify it is available.
+Requires `paul-gross/codediff.nvim` on the runtimepath. Run |:checkhealth|
+winter to verify it is available. Degrades to a clean ERROR notify when absent.
 
                                                                    *:WinterDiff*
-:WinterDiff[!] [env] [winter-args...]
+:WinterDiff[!] [env] [--repo <name>] [winter-args...]
   Open the aggregated cross-repo feature diff for the given environment (default
-  "alpha") in the current window, rendered via the delta renderer.
+  "alpha") via codediff.nvim in a new tab.
 
   Without `!`: opens in the mode configured via `config.diff.mode` (default
-  "branch" — HEAD vs main).
-  With `!` (bang): forces "uncommitted" (working-tree) diff regardless of config.
+  "branch" — HEAD vs origin/<main_branch>).
+  With `!` (bang): forces "uncommitted" (working-tree) diff.
 
-  `[env]` is the first positional argument (default: "alpha"). Any arguments
-  after `[env]` are passed as global winter args for that invocation, overriding
+  `--repo <name>` limits the diff to a single repo worktree within the env.
+  `[env]` is the first positional argument (default: "alpha"). Any remaining
+  arguments are passed as global winter args for that invocation, overriding
   `config.winter_args`.
 
+  Modes:
+    branch      — `codediff.diff_repos`: HEAD vs origin/<main_branch>
+    uncommitted — `codediff.diff_repos_uncommitted`: staged+unstaged+conflicts
+    staged      — routes to `diff_repos_uncommitted`; codediff's working-tree
+                  explorer surfaces a "Staged Changes" group within the view
+
   Examples: >
-    :WinterDiff                  " branch diff for alpha
-    :WinterDiff beta             " branch diff for beta
-    :WinterDiff!                 " uncommitted diff for alpha
-    :WinterDiff! beta            " uncommitted diff for beta
+    :WinterDiff                       " branch diff for alpha
+    :WinterDiff beta                  " branch diff for beta
+    :WinterDiff!                      " uncommitted diff for alpha
+    :WinterDiff! beta                 " uncommitted diff for beta
+    :WinterDiff beta --repo winter    " single-repo scope
     :WinterDiff gamma --winter=/home/me/ws/alpha/winter
 <
-  After render, a `User WinterDiffOpened` autocmd fires with
-  `data = { buf, env }`. Use it to bind buffer-local keymaps without the plugin
-  imposing any defaults.
+  A `User WinterDiffOpened` autocmd fires after dispatch with
+  `data = { env, repo, mode }`.
 
-Buffer-local commands (available after :WinterDiff opens):  *winter-diff-commands*
+codediff's explorer provides its own navigation keymaps (next/prev hunk, file
+list, etc.). winter.nvim does not impose buffer-local commands.
 
-  :WinterDiffNextHunk     Jump cursor to next hunk
-  :WinterDiffPrevHunk     Jump cursor to previous hunk
-  :WinterDiffNextFile     Jump cursor to next file section
-  :WinterDiffPrevFile     Jump cursor to previous file section
-  :WinterDiffDrawer       Open location-list file drawer (window split, opt-in)
-  :WinterDiffRefresh      Re-run diff in place; cursor position preserved
-  :WinterDiffGotoFile     Open source file at cursor line (edit)
-  :WinterDiffGotoFileSplit   ...in a horizontal split
-  :WinterDiffGotoFileVSplit  ...in a vertical split
-  :WinterDiffGotoFileTab     ...in a new tab
-  :WinterDiffClose        Close diff buffer and location-list
-  :WinterDiffYank         Yank current line or range as LLM context (Claude xml)
+==============================================================================
+DASHBOARD                                                      *winter-dashboard*
 
-Navigation (`Next/Prev`) is cursor-based, not loclist-based. The diff buffer is
-read-only; `:w` is a no-op with an INFO notification.
+                                                             *:WinterDashboard*
+:WinterDashboard [winter-args...]
+  Toggle the workspace status dashboard. Opens a persistent panel showing all
+  feature-environment worktrees with git status (ahead/behind/dirty).
+  Closes the window when already visible (buffer stays alive in background).
+
+                                                               *:WinterRefresh*
+:WinterRefresh
+  Trigger an immediate async refresh of the dashboard. No-op with a notify if
+  the dashboard window is not open.
+
+Dashboard keymaps (buffer-local):
+  `l` / `<Right>`  Move selection right (next env column)
+  `h` / `<Left>`   Move selection left (prev env column)
+  `j` / `<Down>`   Move selection down (next repo row)
+  `k` / `<Up>`     Move selection up (prev repo row)
+  `d`              Open a repo diff for the selected cell (branch mode)
+  `D`              Open an env-wide diff for the selected env (branch mode)
+  `q`              Close the dashboard window (buffer stays alive/hidden)
+
+For uncommitted or staged diff variants, use |:WinterDashboardDiff|.
+
+                                                        *:WinterDashboardDiff*
+:WinterDashboardDiff [scope] [mode]
+  Buffer-local command in the dashboard. Opens a diff for the current selection.
+  `scope` — "repo" (default) or "env"
+  `mode`  — "branch" (default), "uncommitted", or "staged"
+
+  Tab-completes scope and mode values.
+
+Dashboard state colors:                               *winter-dashboard-colors*
+  green   (+N)         commits ahead of upstream          WinterDashAhead
+  yellow  (-N)         commits behind upstream            WinterDashBehind
+  red     (N files)    uncommitted working-tree changes   WinterDashDirty
+  cyan    ([+A,-B])    tracking branch diverged           WinterDashDiverged
+  orange  ([+])        unborn upstream (no tracking ref)  WinterDashUnborn
+  dim     (·)          clean — zero ahead/behind/dirty    WinterDashClean
+
+All groups link to standard Neovim groups via `default = true`; your
+colorscheme overrides them naturally.
+
+Dashboard events:                                     *winter-dashboard-events*
+  User WinterDashboardOpened
+    Fired when the dashboard window is shown (toggle open / first open).
+    data = { buf }
+
+  User WinterDashboardRefreshed
+    Fired after each async refresh has finished re-rendering the buffer.
+    data = { buf }
+
+  User WinterDashboardSelectionChanged
+    Fired when the virtual selection moves to a new cell (not on every redraw).
+    data = { buf, selection = { kind, env, repo, row, col } }
+
+Dashboard scope note:                                 *winter-dashboard-scope*
+  The Neovim dashboard is read-only and MVP-scoped. It does not implement
+  fetch/pull/push/merge operations, drill-in detail views, or `git log --graph`
+  panels. These features remain in the Textual `winter dashboard` (the Python
+  TUI), which is the canonical full-featured surface for workspace management.
 
 ==============================================================================
 LUA API                                                            *winter-api*
@@ -257,10 +364,38 @@ LUA API                                                            *winter-api*
   Open the cross-repo feature diff viewer. See |winter-diff|.
 
   `opts` is an optional table:
-    `env` (string)         — environment name (default "alpha").
-    `mode` (string)        — "branch" | "uncommitted" | "staged"
-                             (default `config.diff.mode`).
+    `env` (string)           — environment name (default "alpha").
+    `repo` (string)          — limit to a single repo worktree (optional).
+    `mode` (string)          — "branch" | "uncommitted" | "staged"
+                               (default `config.diff.mode`).
     `winter_args` (string[]) — override `config.winter_args` for this call.
+    `status` (table)         — pre-parsed ws status JSON (skips CLI refetch).
+
+                                                    *winter.dashboard()*
+`require("winter").dashboard({opts})`
+  Toggle the workspace status dashboard. See |winter-dashboard|.
+
+  `opts` is an optional table:
+    `winter_args` (string[]) — override `config.winter_args` for this call.
+
+                                                    *winter.dashboard_refresh()*
+`require("winter").dashboard_refresh()`
+  Trigger an immediate async refresh of the dashboard if it is open.
+  No-op if the dashboard buffer/window is not visible.
+
+                                                    *winter.dashboard_selection()*
+`require("winter").dashboard_selection()`
+  Return the current dashboard selection as `{ kind, env, repo, row, col }`,
+  or nil if no selection.
+
+                                                    *winter.dashboard_diff()*
+`require("winter").dashboard_diff({opts})`
+  Open a diff for the current dashboard selection via codediff.nvim.
+
+  `opts` is an optional table:
+    `scope` ("repo"|"env") — whether to diff the selected repo or the whole env
+                             (default "repo").
+    `mode` (string)        — "branch" | "uncommitted" | "staged" (default "branch").
 
                                                           *winter.switch_to()*
 `require("winter").switch_to({path}, {label})`
@@ -329,31 +464,27 @@ Run the built-in health check to verify your setup: >
 The health check reports:
   - Whether snacks.nvim can be required
   - Whether the configured winter CLI is executable on PATH (and its version)
-  - Whether the delta renderer (`kokusenz/deltaview.nvim`) is installed and
-    whether its expected API functions are present. A "schema mismatch" warning
-    here means navigation and yank in |:WinterDiff| may be unavailable after
-    a deltaview.nvim update (check `delta.patch_diff` and related functions).
+  - Whether codediff.nvim (`paul-gross/codediff.nvim`) is installed and whether
+    its expected API functions are present (`diff_repos`, `diff_repos_uncommitted`,
+    `next_hunk`, etc.). A warning means :WinterDiff and dashboard quick-diffs will
+    degrade to an ERROR notify when invoked.
 
 ==============================================================================
 DEVELOPMENT                                                   *winter-development*
 
 Source layout: >
-  lua/winter/init.lua        -- public API: setup(), worktrees(), diff(), switch_to()
+  lua/winter/init.lua        -- public API: setup(), worktrees(), diff(), dashboard(), ...
   lua/winter/config.lua      -- default config + validation
   lua/winter/cli.lua         -- CLI invocation seam (build_argv, run_async)
   lua/winter/workspace.lua   -- find_root(), find_root_from_context()
   lua/winter/worktrees.lua   -- worktrees picker feature module
-  lua/winter/diff.lua        -- cross-repo diff viewer feature module
+  lua/winter/diff.lua        -- cross-repo diff viewer (codediff adapter)
+  lua/winter/dashboard.lua   -- workspace status dashboard feature module
   lua/winter/session.lua     -- session_file() + switch_to() (pure helpers)
   lua/winter/health.lua      -- :checkhealth winter
   plugin/winter.lua          -- plugin file: guards, user commands
   tests/                     -- test suite (mini.test)
 <
-
-Adding a new feature (e.g. dashboard):
-  1. Create lua/winter/dashboard.lua with M.open(cfg, opts?)
-  2. Add M.dashboard(opts?) in lua/winter/init.lua delegating to it
-  3. Add "dashboard" to the subcommands table in plugin/winter.lua
 
 Linting and formatting: >
   make lint    # stylua --check + luacheck

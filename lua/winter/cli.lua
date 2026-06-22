@@ -81,4 +81,55 @@ function M.run_async(root, cfg, global_args, subcommand_args, on_done, runner)
   end
 end
 
+---Run `winter ws status --json` asynchronously, tolerating the semantic non-zero
+---exit code that `winter ws status` uses to signal dirty/ahead/behind state.
+---
+--- `winter ws status` exits with code 1 (not 0) when any repo is dirty or
+--- ahead/behind. This is a semantic exit code — the JSON payload is still valid.
+--- This helper normalises that: when the process exits non-zero but stdout is
+--- non-empty, the result is treated as success (code=0). True failures produce
+--- empty stdout and are forwarded as errors.
+---
+--- Both `dashboard.lua` and `diff.lua` use this helper so the normalisation
+--- rule lives in ONE place.
+---
+--- An optional callback-style `runner` can be injected for unit tests — same
+--- contract as `run_async`: receives `(argv, cwd, on_exit)` and invokes
+--- `on_exit` with `{ code, stdout, stderr }`. Injected runners are used
+--- verbatim (no normalisation wrapper applied) so tests can pre-normalise.
+---
+---@param root string workspace root directory (used as cwd)
+---@param cfg Winter.Config plugin configuration
+---@param global_args string[] global flags (see build_argv)
+---@param on_done fun(result: {code: integer, stdout: string, stderr: string}|nil, err: string|nil)
+---@param runner? fun(argv: string[], cwd: string, on_exit: fun(result: {code: integer, stdout: string, stderr: string}))
+function M.run_status_async(root, cfg, global_args, on_done, runner)
+  -- When a test runner is injected, use it directly (tests supply pre-normalised
+  -- results and expect the raw on_done semantics from run_async).
+  if runner then
+    M.run_async(root, cfg, global_args, { "ws", "status", "--json" }, on_done, runner)
+    return
+  end
+
+  -- Real invocation: wrap vim.system to normalise the semantic non-zero exit.
+  local argv = M.build_argv(cfg.winter_cmd, global_args, { "ws", "status", "--json" })
+  vim.system(argv, { cwd = root, text = true }, function(result)
+    if result.code ~= 0 and vim.trim(result.stdout or "") ~= "" then
+      -- Semantic non-zero: dirty/ahead/behind workspace. JSON is still valid.
+      on_done({ code = 0, stdout = result.stdout, stderr = result.stderr }, nil)
+    else
+      -- True failure (empty stdout) or success (code 0): forward as-is.
+      local function on_exit(r)
+        if r.code ~= 0 then
+          local stderr = vim.trim(r.stderr or "")
+          on_done(nil, ("winter CLI exited with code %d: %s"):format(r.code, stderr ~= "" and stderr or "(no output)"))
+        else
+          on_done(r, nil)
+        end
+      end
+      on_exit(result)
+    end
+  end)
+end
+
 return M

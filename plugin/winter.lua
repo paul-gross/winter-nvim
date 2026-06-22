@@ -18,17 +18,42 @@ local subcommands = {
     require("winter").worktrees(opts)
   end,
   diff = function(args)
-    -- First positional arg (if any) is the env; remaining args are winter_args.
-    local env = args[1]
+    -- Parse: first positional = env; --repo <name> for single-repo scope.
+    local env = nil
+    local repo = nil
     local winter_args = {}
-    for i = 2, #args do
-      winter_args[#winter_args + 1] = args[i]
+    local i = 1
+    while i <= #args do
+      local a = args[i]
+      if a == "--repo" then
+        i = i + 1
+        repo = args[i]
+      elseif not env then
+        env = a
+      else
+        winter_args[#winter_args + 1] = a
+      end
+      i = i + 1
     end
     local opts = { env = env }
+    if repo then
+      opts.repo = repo
+    end
     if #winter_args > 0 then
       opts.winter_args = winter_args
     end
     require("winter").diff(opts)
+  end,
+  dashboard = function(args)
+    local winter_args = {}
+    for _, a in ipairs(args) do
+      winter_args[#winter_args + 1] = a
+    end
+    local opts = (#winter_args > 0) and { winter_args = winter_args } or nil
+    require("winter").dashboard(opts)
+  end,
+  refresh = function(_args)
+    require("winter").dashboard_refresh()
   end,
 }
 
@@ -45,22 +70,40 @@ end, {
   desc = "Open the winter worktrees picker (optional: pass global winter args)",
 })
 
--- :WinterDiff[!] [env] [winter-args...]
--- Opens the cross-repo feature diff for ENV (default "alpha"), replacing the
--- buffer in the current window.
--- With no bang: branch diff (HEAD vs main) via config.diff.mode.
--- With bang (:WinterDiff!): uncommitted working-tree changes.
--- Any args after [env] are passed as global winter args for this invocation,
--- overriding config.winter_args (e.g. to target a dev CLI build).
+-- :WinterDiff[!] [env] [--repo <name>] [winter-args...]
+-- Opens the cross-repo feature diff for ENV (default "alpha") using codediff.nvim.
+-- With no bang: branch diff (HEAD vs origin/<main_branch>).
+-- With bang (:WinterDiff!): uncommitted working-tree changes (staged+unstaged+conflicts).
+-- --repo <name>: limit diff to a single repo worktree within the env.
+-- Any remaining args after parsing are passed as global winter args for this
+-- invocation, overriding config.winter_args (e.g. to target a dev CLI build).
 vim.api.nvim_create_user_command("WinterDiff", function(cmd_opts)
-  local env = cmd_opts.fargs[1] or "alpha"
+  -- Parse args: extract --repo <name> before treating remaining as env/winter_args.
+  local raw_args = cmd_opts.fargs
+  local env = nil
+  local repo = nil
+  local winter_args = {}
+  local i = 1
+  while i <= #raw_args do
+    local a = raw_args[i]
+    if a == "--repo" then
+      i = i + 1
+      repo = raw_args[i]
+    elseif not env then
+      env = a
+    else
+      winter_args[#winter_args + 1] = a
+    end
+    i = i + 1
+  end
+  env = env or "alpha"
+
   -- bang forces uncommitted; otherwise nil lets M.open resolve cfg.diff.mode.
   local mode = cmd_opts.bang and "uncommitted" or nil
-  local winter_args = {}
-  for i = 2, #cmd_opts.fargs do
-    winter_args[#winter_args + 1] = cmd_opts.fargs[i]
-  end
   local opts = { env = env, mode = mode }
+  if repo then
+    opts.repo = repo
+  end
   if #winter_args > 0 then
     opts.winter_args = winter_args
   end
@@ -68,7 +111,41 @@ vim.api.nvim_create_user_command("WinterDiff", function(cmd_opts)
 end, {
   nargs = "*",
   bang = true,
-  desc = "Open the cross-repo feature diff (! = uncommitted working tree; optional: env [winter-args...])",
+  desc = "Open the cross-repo feature diff via codediff (! = uncommitted; optional: env [--repo <name>] [winter-args...])",
+})
+
+-- :WinterDashboard [winter-args...]
+-- Toggles the persistent workspace status dashboard. Any args are forwarded as
+-- global winter args for this invocation (e.g. to target a dev CLI build).
+vim.api.nvim_create_user_command("WinterDashboard", function(cmd_opts)
+  local args = cmd_opts.fargs
+  local opts = (#args > 0) and { winter_args = args } or nil
+  require("winter").dashboard(opts)
+end, {
+  nargs = "*",
+  desc = "Toggle the winter workspace status dashboard",
+})
+
+-- :WinterRefresh
+-- Refreshes the dashboard if it is currently open. No-op (with a notification)
+-- when the dashboard is not open.
+vim.api.nvim_create_user_command("WinterRefresh", function(_cmd_opts)
+  -- Check whether the dashboard window is visible before delegating, so we
+  -- can surface a friendly notify rather than a silent no-op.
+  local bufnr = vim.fn.bufnr("winter://dashboard")
+  if bufnr == -1 or not vim.api.nvim_buf_is_valid(bufnr) then
+    vim.notify("winter.nvim: dashboard is not open", vim.log.levels.INFO)
+    return
+  end
+  local wins = vim.fn.win_findbuf(bufnr)
+  if not wins or #wins == 0 then
+    vim.notify("winter.nvim: dashboard is not open", vim.log.levels.INFO)
+    return
+  end
+  require("winter").dashboard_refresh()
+end, {
+  nargs = 0,
+  desc = "Refresh the winter workspace status dashboard (no-op if not open)",
 })
 
 -- :Winter [subcommand] [winter-args...]
