@@ -345,6 +345,73 @@ T["diff.build_specs: all dirs missing returns empty list"] = function()
   MiniTest.expect.equality(#specs, 0)
 end
 
+T["diff.build_specs: no base option → default origin/<main_branch> per repo"] = function()
+  local diff = require("winter.diff")
+  local specs = diff.build_specs(diff_status, { env = "epsilon", workspace_root = "/ws" }, exists_all)
+
+  MiniTest.expect.equality(#specs, 3)
+  -- winter and winter-nvim have main_branch="master"
+  MiniTest.expect.equality(specs[1].base, "origin/master")
+  MiniTest.expect.equality(specs[2].base, "origin/master")
+  -- winter-harness has main_branch="main"
+  MiniTest.expect.equality(specs[3].base, "origin/main")
+  -- target is always HEAD
+  MiniTest.expect.equality(specs[1].target, "HEAD")
+  MiniTest.expect.equality(specs[3].target, "HEAD")
+end
+
+T["diff.build_specs: opts.base='origin/master' overrides every spec"] = function()
+  local diff = require("winter.diff")
+  local specs =
+    diff.build_specs(diff_status, { env = "epsilon", workspace_root = "/ws", base = "origin/master" }, exists_all)
+
+  MiniTest.expect.equality(#specs, 3)
+  for _, spec in ipairs(specs) do
+    MiniTest.expect.equality(spec.base, "origin/master")
+    MiniTest.expect.equality(spec.target, "HEAD")
+  end
+end
+
+T["diff.build_specs: opts.base='HEAD~1' overrides every spec"] = function()
+  local diff = require("winter.diff")
+  local specs = diff.build_specs(diff_status, { env = "epsilon", workspace_root = "/ws", base = "HEAD~1" }, exists_all)
+
+  MiniTest.expect.equality(#specs, 3)
+  for _, spec in ipairs(specs) do
+    MiniTest.expect.equality(spec.base, "HEAD~1")
+    MiniTest.expect.equality(spec.target, "HEAD")
+  end
+end
+
+T["diff.build_specs: opts.base with repo filter → single spec with overridden base"] = function()
+  local diff = require("winter.diff")
+  local specs = diff.build_specs(
+    diff_status,
+    { env = "epsilon", repo = "winter-harness", workspace_root = "/ws", base = "HEAD~1" },
+    exists_all
+  )
+
+  MiniTest.expect.equality(#specs, 1)
+  MiniTest.expect.equality(specs[1].root, "/ws/epsilon/winter-harness")
+  MiniTest.expect.equality(specs[1].base, "HEAD~1")
+  MiniTest.expect.equality(specs[1].target, "HEAD")
+  MiniTest.expect.equality(specs[1].label, "epsilon/winter-harness")
+end
+
+T["diff.build_specs: opts.base does not affect skipped repos (exists_fn respected)"] = function()
+  local diff = require("winter.diff")
+  -- Only approve /ws/epsilon/winter
+  local exists_fn = function(p)
+    return p == "/ws/epsilon/winter"
+  end
+  local specs =
+    diff.build_specs(diff_status, { env = "epsilon", workspace_root = "/ws", base = "origin/master" }, exists_fn)
+
+  MiniTest.expect.equality(#specs, 1)
+  MiniTest.expect.equality(specs[1].root, "/ws/epsilon/winter")
+  MiniTest.expect.equality(specs[1].base, "origin/master")
+end
+
 -- ---------------------------------------------------------------------------
 -- diff.build_roots — pure codediff root builder for uncommitted/staged mode
 -- ---------------------------------------------------------------------------
@@ -2000,6 +2067,75 @@ T["dashboard.build_grid: feature branch line appears below header"] = function()
   MiniTest.expect.equality(found, true)
 end
 
+T["dashboard.build_grid: repo-label column floor is 40 and env column floor is 12"] = function()
+  local dashboard = require("winter.dashboard")
+  -- Minimal status with SHORT repo names and env names so content is well
+  -- under the 40-col repo-label floor and 12-col env-column floor.
+  local short_status = {
+    schema_version = 1,
+    dashboard = { resolved_layout = "repos-as-rows" },
+    environments = {
+      {
+        name = "a", -- 1 char — well under 12
+        index = 1,
+        port_base = 4020,
+        feature_branch = "master",
+        extensions = {},
+        worktrees = {
+          {
+            repo = "myrepo",
+            branch = "a",
+            ahead = 0,
+            behind = 0,
+            dirty = 0,
+            tracking_ahead = 0,
+            tracking_behind = 0,
+            tracking_ref_present = true,
+            pinned = false,
+          },
+        },
+      },
+    },
+  }
+  local grid = dashboard.build_grid(short_status)
+
+  -- The header line (line 1) starts with the repo-label column (padded to
+  -- repo_col_w), followed by SEP ("  "), then the env-column content.
+  -- repo_col_w must be at least 40; the header prefix is all spaces (no repo
+  -- name in the header itself) so its length equals repo_col_w.
+  -- We find the header row: it contains the title-cased env name "A".
+  local header_line = nil
+  for _, line in ipairs(grid.lines) do
+    if line:find(" A", 1, true) or line:sub(1, 1) == " " then
+      -- Take the first line that starts with spaces (the repo-label pad area).
+      header_line = line
+      break
+    end
+  end
+  MiniTest.expect.equality(header_line ~= nil, true)
+
+  -- The header line layout is:
+  --   <repo_col_w spaces><SEP (2 spaces)><env header content>
+  -- So the leading blank prefix must be at least 40 characters.
+  local leading_spaces = header_line:match("^( +)")
+  local prefix_len = leading_spaces and #leading_spaces or 0
+  -- prefix_len = repo_col_w (the repo-label column) + #SEP(2).
+  -- repo_col_w >= 40, so prefix_len >= 42.
+  MiniTest.expect.equality(prefix_len >= 42, true)
+
+  -- The env column for "a" must be at least 12 wide.
+  -- Measure by finding the worktree cell for this env and checking col_end - col_start.
+  local env_cell_w = nil
+  for _, cell in ipairs(grid.cells) do
+    if cell.kind == "env" and cell.env == "a" then
+      env_cell_w = cell.col_end - cell.col_start
+      break
+    end
+  end
+  MiniTest.expect.equality(env_cell_w ~= nil, true)
+  MiniTest.expect.equality(env_cell_w >= 12, true)
+end
+
 -- ---------------------------------------------------------------------------
 -- main_branch gating: tracking markers suppressed when upstream == origin/main
 -- ---------------------------------------------------------------------------
@@ -3228,6 +3364,153 @@ T["WinterDashboardSelectionChanged fires with correct payload on nav move"] = fu
   end
 end
 
+T["dashboard 'd' keymap diffs in the configured cfg.diff.mode (uncommitted)"] = function()
+  local dashboard = require("winter.dashboard")
+  local cfg = vim.tbl_deep_extend("force", require("winter.config").defaults, {
+    winter_cmd = "winter",
+    winter_args = {},
+    diff = { mode = "uncommitted" },
+  })
+
+  local workspace = require("winter.workspace")
+  local orig_from_context = workspace.find_root_from_context
+  workspace.find_root_from_context = function()
+    return "/fake/root"
+  end
+
+  -- Stub winter.diff so pressing 'd' records the opts instead of launching codediff
+  -- (codediff is not on the runtimepath in the headless test env).
+  local orig_diff = package.loaded["winter.diff"]
+  local captured = nil
+  package.loaded["winter.diff"] = {
+    open = function(_cfg, opts)
+      captured = opts
+    end,
+  }
+
+  local fake_runner = function(_argv, _cwd, on_exit)
+    on_exit({ code = 0, stdout = sample_status, stderr = "" })
+  end
+
+  dashboard.open(cfg, {}, fake_runner)
+  local bufnr = vim.fn.bufnr("winter://dashboard")
+  vim.wait(500, function()
+    return dashboard.get_selection(bufnr) ~= nil
+  end, 20)
+
+  -- Feed the buffer-local 'd' map while the dashboard window is current.
+  if bufnr ~= -1 and vim.api.nvim_buf_is_valid(bufnr) then
+    local wins = vim.fn.win_findbuf(bufnr)
+    if wins and #wins > 0 then
+      vim.api.nvim_set_current_win(wins[1])
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("d", true, false, true), "x", false)
+      vim.wait(200, function()
+        return captured ~= nil
+      end, 10)
+    end
+  end
+
+  -- Restore globals before asserting.
+  package.loaded["winter.diff"] = orig_diff
+  dashboard.open(cfg, {}, fake_runner) -- close
+  workspace.find_root_from_context = orig_from_context
+
+  MiniTest.expect.equality(type(captured), "table")
+  MiniTest.expect.equality(captured.mode, "uncommitted")
+  MiniTest.expect.equality(type(captured.repo), "string") -- 'd' is repo-scoped
+end
+
+-- Helper shared by the a/s/e/A/S/E keymap tests: opens the dashboard with
+-- a stubbed winter.diff, feeds a single key, returns captured opts.
+local function run_dashboard_key_test(key)
+  local dashboard = require("winter.dashboard")
+  local cfg = vim.tbl_deep_extend("force", require("winter.config").defaults, {
+    winter_cmd = "winter",
+    winter_args = {},
+  })
+
+  local workspace = require("winter.workspace")
+  local orig_from_context = workspace.find_root_from_context
+  workspace.find_root_from_context = function()
+    return "/fake/root"
+  end
+
+  local orig_diff = package.loaded["winter.diff"]
+  local captured = nil
+  package.loaded["winter.diff"] = {
+    open = function(_cfg, opts)
+      captured = opts
+    end,
+  }
+
+  local fake_runner = function(_argv, _cwd, on_exit)
+    on_exit({ code = 0, stdout = sample_status, stderr = "" })
+  end
+
+  dashboard.open(cfg, {}, fake_runner)
+  local bufnr = vim.fn.bufnr("winter://dashboard")
+  vim.wait(500, function()
+    return dashboard.get_selection(bufnr) ~= nil
+  end, 20)
+
+  if bufnr ~= -1 and vim.api.nvim_buf_is_valid(bufnr) then
+    local wins = vim.fn.win_findbuf(bufnr)
+    if wins and #wins > 0 then
+      vim.api.nvim_set_current_win(wins[1])
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(key, true, false, true), "x", false)
+      vim.wait(200, function()
+        return captured ~= nil
+      end, 10)
+    end
+  end
+
+  package.loaded["winter.diff"] = orig_diff
+  dashboard.open(cfg, {}, fake_runner) -- close
+  workspace.find_root_from_context = orig_from_context
+
+  return captured
+end
+
+T["dashboard 'a' keymap: branch mode, nil base, repo-scoped"] = function()
+  local captured = run_dashboard_key_test("a")
+  MiniTest.expect.equality(type(captured), "table")
+  MiniTest.expect.equality(captured.mode, "branch")
+  MiniTest.expect.equality(captured.base, nil)
+  MiniTest.expect.equality(type(captured.repo), "string")
+end
+
+T["dashboard 's' keymap: branch mode, origin/master base, repo-scoped"] = function()
+  local captured = run_dashboard_key_test("s")
+  MiniTest.expect.equality(type(captured), "table")
+  MiniTest.expect.equality(captured.mode, "branch")
+  MiniTest.expect.equality(captured.base, "origin/master")
+  MiniTest.expect.equality(type(captured.repo), "string")
+end
+
+T["dashboard 'e' keymap: branch mode, HEAD~1 base, repo-scoped"] = function()
+  local captured = run_dashboard_key_test("e")
+  MiniTest.expect.equality(type(captured), "table")
+  MiniTest.expect.equality(captured.mode, "branch")
+  MiniTest.expect.equality(captured.base, "HEAD~1")
+  MiniTest.expect.equality(type(captured.repo), "string")
+end
+
+T["dashboard 'S' keymap: branch mode, origin/master base, env-scoped"] = function()
+  local captured = run_dashboard_key_test("S")
+  MiniTest.expect.equality(type(captured), "table")
+  MiniTest.expect.equality(captured.mode, "branch")
+  MiniTest.expect.equality(captured.base, "origin/master")
+  MiniTest.expect.equality(captured.repo, nil) -- env-scoped: no repo filter
+end
+
+T["dashboard 'E' keymap: branch mode, HEAD~1 base, env-scoped"] = function()
+  local captured = run_dashboard_key_test("E")
+  MiniTest.expect.equality(type(captured), "table")
+  MiniTest.expect.equality(captured.mode, "branch")
+  MiniTest.expect.equality(captured.base, "HEAD~1")
+  MiniTest.expect.equality(captured.repo, nil) -- env-scoped: no repo filter
+end
+
 T["WinterDashboardSelectionChanged does NOT fire when selection is clamped (unchanged)"] = function()
   local dashboard = require("winter.dashboard")
   local cfg =
@@ -3301,6 +3584,195 @@ T["WinterDashboardSelectionChanged does NOT fire when selection is clamped (unch
   workspace.find_root_from_context = orig_from_context
 
   MiniTest.expect.equality(fired, false)
+end
+
+T["dashboard 'o' keymap: calls session.switch_to with correct worktree path"] = function()
+  local dashboard = require("winter.dashboard")
+  local cfg = vim.tbl_deep_extend("force", require("winter.config").defaults, {
+    winter_cmd = "winter",
+    winter_args = {},
+  })
+
+  local workspace = require("winter.workspace")
+  local orig_from_context = workspace.find_root_from_context
+  workspace.find_root_from_context = function()
+    return "/fake/root"
+  end
+
+  -- Stub winter.session so pressing 'o' records args instead of actually switching.
+  local orig_session = package.loaded["winter.session"]
+  local captured = nil
+  package.loaded["winter.session"] = {
+    switch_to = function(path, label, opts)
+      captured = { path = path, label = label, opts = opts }
+    end,
+  }
+
+  local fake_runner = function(_argv, _cwd, on_exit)
+    on_exit({ code = 0, stdout = sample_status, stderr = "" })
+  end
+
+  dashboard.open(cfg, {}, fake_runner)
+  local bufnr = vim.fn.bufnr("winter://dashboard")
+  vim.wait(500, function()
+    return dashboard.get_selection(bufnr) ~= nil
+  end, 20)
+
+  if bufnr ~= -1 and vim.api.nvim_buf_is_valid(bufnr) then
+    local wins = vim.fn.win_findbuf(bufnr)
+    if wins and #wins > 0 then
+      vim.api.nvim_set_current_win(wins[1])
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("o", true, false, true), "x", false)
+      vim.wait(200, function()
+        return captured ~= nil
+      end, 10)
+    end
+  end
+
+  -- Restore globals before asserting.
+  package.loaded["winter.session"] = orig_session
+  -- Ensure dashboard is closed (the 'o' handler now closes it unconditionally).
+  if vim.fn.bufnr("winter://dashboard") ~= -1 then
+    local wins2 = vim.fn.win_findbuf(vim.fn.bufnr("winter://dashboard"))
+    if wins2 and #wins2 > 0 then
+      local fake_runner2 = function(_argv, _cwd, on_exit)
+        on_exit({ code = 0, stdout = sample_status, stderr = "" })
+      end
+      dashboard.open(cfg, {}, fake_runner2)
+    end
+  end
+  workspace.find_root_from_context = orig_from_context
+
+  MiniTest.expect.equality(type(captured), "table")
+  -- The selection after opening sample_status defaults to alpha/winter (first cell).
+  local sel = dashboard.get_selection()
+  local expected_env = sel and sel.env or "alpha"
+  local expected_repo = sel and sel.repo or "winter"
+  MiniTest.expect.equality(captured.path, "/fake/root/" .. expected_env .. "/" .. expected_repo)
+  MiniTest.expect.equality(type(captured.label), "string")
+  MiniTest.expect.equality(type(captured.opts), "table")
+end
+
+-- Regression: 'o' handler must close the dashboard and stop the timer even
+-- when session.switch_to itself closes the dashboard window (simulating a
+-- session :source replay that wipes the window — the bug path).
+T["dashboard 'o' keymap: closes dashboard and stops timer when session wipes window"] = function()
+  local dashboard = require("winter.dashboard")
+  local cfg = vim.tbl_deep_extend("force", require("winter.config").defaults, {
+    winter_cmd = "winter",
+    winter_args = {},
+  })
+
+  local workspace = require("winter.workspace")
+  local orig_from_context = workspace.find_root_from_context
+  workspace.find_root_from_context = function()
+    return "/fake/root"
+  end
+
+  local orig_session = package.loaded["winter.session"]
+
+  local fake_runner = function(_argv, _cwd, on_exit)
+    on_exit({ code = 0, stdout = sample_status, stderr = "" })
+  end
+
+  -- Open the dashboard so there is a real window to interact with.
+  dashboard.open(cfg, {}, fake_runner)
+  local bufnr = vim.fn.bufnr("winter://dashboard")
+  vim.wait(500, function()
+    return dashboard.get_selection(bufnr) ~= nil
+  end, 20)
+
+  -- Stub switch_to so it closes the dashboard window itself, simulating a
+  -- session :source that wiped the window before our close step.
+  package.loaded["winter.session"] = {
+    switch_to = function(_path, _label, _opts)
+      -- Mimic a session :source replay that destroys the dashboard window.
+      local wins = vim.fn.win_findbuf(bufnr)
+      if wins and #wins > 0 then
+        pcall(vim.api.nvim_win_close, wins[1], true)
+      end
+    end,
+  }
+
+  if bufnr ~= -1 and vim.api.nvim_buf_is_valid(bufnr) then
+    local wins = vim.fn.win_findbuf(bufnr)
+    if wins and #wins > 0 then
+      vim.api.nvim_set_current_win(wins[1])
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("o", true, false, true), "x", false)
+      -- Give the handler time to execute.
+      vim.wait(200, function()
+        return not dashboard._timer_active()
+      end, 10)
+    end
+  end
+
+  package.loaded["winter.session"] = orig_session
+  workspace.find_root_from_context = orig_from_context
+
+  -- (a) No dashboard window exists after the handler ran.
+  local wins_after = vim.fn.win_findbuf(bufnr)
+  MiniTest.expect.equality(#wins_after == 0, true)
+  -- (b) The refresh timer is stopped.
+  MiniTest.expect.equality(dashboard._timer_active(), false)
+  -- (c) The WinClosed guard is cleared.
+  MiniTest.expect.equality(dashboard._winclosed_guard_active(), false)
+end
+
+-- Regression: 'o' handler must also close dashboard and stop timer when
+-- session.switch_to does NOT close the window (the normal non-session path).
+T["dashboard 'o' keymap: closes dashboard and stops timer when session does not wipe window"] = function()
+  local dashboard = require("winter.dashboard")
+  local cfg = vim.tbl_deep_extend("force", require("winter.config").defaults, {
+    winter_cmd = "winter",
+    winter_args = {},
+  })
+
+  local workspace = require("winter.workspace")
+  local orig_from_context = workspace.find_root_from_context
+  workspace.find_root_from_context = function()
+    return "/fake/root"
+  end
+
+  local orig_session = package.loaded["winter.session"]
+
+  local fake_runner = function(_argv, _cwd, on_exit)
+    on_exit({ code = 0, stdout = sample_status, stderr = "" })
+  end
+
+  dashboard.open(cfg, {}, fake_runner)
+  local bufnr = vim.fn.bufnr("winter://dashboard")
+  vim.wait(500, function()
+    return dashboard.get_selection(bufnr) ~= nil
+  end, 20)
+
+  -- Stub switch_to as a no-op (does NOT close the window).
+  package.loaded["winter.session"] = {
+    switch_to = function(_path, _label, _opts)
+      -- intentionally do nothing; window stays open
+    end,
+  }
+
+  if bufnr ~= -1 and vim.api.nvim_buf_is_valid(bufnr) then
+    local wins = vim.fn.win_findbuf(bufnr)
+    if wins and #wins > 0 then
+      vim.api.nvim_set_current_win(wins[1])
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("o", true, false, true), "x", false)
+      vim.wait(200, function()
+        return not dashboard._timer_active()
+      end, 10)
+    end
+  end
+
+  package.loaded["winter.session"] = orig_session
+  workspace.find_root_from_context = orig_from_context
+
+  -- (a) No dashboard window exists after the handler ran.
+  local wins_after = vim.fn.win_findbuf(bufnr)
+  MiniTest.expect.equality(#wins_after == 0, true)
+  -- (b) The refresh timer is stopped.
+  MiniTest.expect.equality(dashboard._timer_active(), false)
+  -- (c) The WinClosed guard is cleared.
+  MiniTest.expect.equality(dashboard._winclosed_guard_active(), false)
 end
 
 return T

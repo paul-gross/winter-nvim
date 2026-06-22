@@ -29,7 +29,10 @@
 --- Degrades to a clean ERROR notify when codediff is absent.
 ---
 --- Modes:
----   branch      — `diff_repos`: HEAD vs origin/<main_branch> (committed diff)
+---   branch      — `diff_repos`: HEAD vs origin/<main_branch> (committed diff).
+---                 Pass `opts.base` to `M.open` to override the base revision
+---                 (e.g. "origin/master" or "HEAD~1"); default is
+---                 "origin/<main_branch>" per-repo from ws status.
 ---   uncommitted — `diff_repos_uncommitted`: working-tree staged+unstaged+conflicts
 ---   staged      — routes to `diff_repos_uncommitted` (codediff's working-tree
 ---                 explorer surfaces a "Staged Changes" group within the same view).
@@ -64,7 +67,7 @@ end
 ---Build the list of codediff `diff_repos` specs for a branch diff.
 --- Each spec = { root, base, target, label } where:
 ---   root  = absolute path to the worktree  (<workspace_root>/<env>/<repo>)
----   base  = "origin/<main_branch>"
+---   base  = opts.base when given, otherwise "origin/<main_branch>" per repo
 ---   target = "HEAD"
 ---   label = "<env>/<repo>"
 ---
@@ -73,7 +76,7 @@ end
 --- (pass a custom exists_fn to stub `vim.fn.isdirectory`).
 ---
 ---@param status table decoded `ws status --json` table
----@param opts { env: string, repo?: string, workspace_root: string }
+---@param opts { env: string, repo?: string, workspace_root: string, base?: string } base overrides the default "origin/<main_branch>" revision for every spec; when absent each spec uses "origin/" .. wt.main_branch (default "master")
 ---@param exists_fn? fun(path: string): boolean filesystem probe (injectable for tests; defaults to vim.fn.isdirectory)
 ---@return { root: string, base: string, target: string, label: string }[]
 function M.build_specs(status, opts, exists_fn)
@@ -84,6 +87,7 @@ function M.build_specs(status, opts, exists_fn)
   local env_name = opts.env
   local repo_filter = opts.repo
   local ws_root = opts.workspace_root
+  local base_override = opts.base
 
   -- Find the matching env in the status.
   local env_entry = nil
@@ -106,7 +110,7 @@ function M.build_specs(status, opts, exists_fn)
       local root = ws_root .. "/" .. env_name .. "/" .. repo
       if exists_fn(root) then
         local main_branch = wt.main_branch or "master"
-        local base = "origin/" .. main_branch
+        local base = base_override or ("origin/" .. main_branch)
         local label = env_name .. "/" .. repo
         specs[#specs + 1] = { root = root, base = base, target = "HEAD", label = label }
       end
@@ -169,14 +173,15 @@ end
 ---@param mode string "branch"|"uncommitted"|"staged"
 ---@param ws_root string workspace root path
 ---@param diff_layout? string optional codediff layout ("inline"|"side-by-side")
-local function dispatch(codediff, status, env, repo, mode, ws_root, diff_layout)
+---@param base? string optional base revision for branch mode (default "origin/<main_branch>")
+local function dispatch(codediff, status, env, repo, mode, ws_root, diff_layout, base)
   local codediff_opts = {}
   if diff_layout then
     codediff_opts.layout = diff_layout
   end
 
   if mode == "branch" then
-    local specs = M.build_specs(status, { env = env, repo = repo, workspace_root = ws_root })
+    local specs = M.build_specs(status, { env = env, repo = repo, workspace_root = ws_root, base = base })
     if #specs == 0 then
       vim.notify(("winter.diff: no worktree dirs found for env %q"):format(env), vim.log.levels.INFO)
       return
@@ -220,13 +225,14 @@ end
 --- dashboard after its own fetch) to avoid a redundant CLI round-trip.
 ---
 ---@param cfg Winter.Config plugin configuration
----@param opts? { env?: string, repo?: string, mode?: string, winter_args?: string[], status?: table } env (default "alpha"); repo (optional single-repo scope); mode ("branch"|"uncommitted"|"staged", default cfg.diff.mode); winter_args overrides cfg.winter_args; status pre-parsed status table (skips CLI refetch)
+---@param opts? { env?: string, repo?: string, mode?: string, base?: string, winter_args?: string[], status?: table } env (default "alpha"); repo (optional single-repo scope); mode ("branch"|"uncommitted"|"staged", default cfg.diff.mode); base git revision used as the diff base in branch mode (default "origin/<main_branch>" per repo); winter_args overrides cfg.winter_args; status pre-parsed status table (skips CLI refetch)
 ---@param runner? fun(argv: string[], cwd: string, on_exit: fun(result: table)) injectable CLI runner for unit tests
 function M.open(cfg, opts, runner)
   opts = opts or {}
   local env = opts.env or "alpha"
-  local repo = opts.repo or nil
+  local repo = opts.repo
   local mode = opts.mode or (cfg.diff and cfg.diff.mode) or "branch"
+  local base = opts.base
 
   if not VALID_MODES[mode] then
     vim.notify(("winter.diff: invalid mode %q (use branch|uncommitted|staged)"):format(mode), vim.log.levels.ERROR)
@@ -249,7 +255,7 @@ function M.open(cfg, opts, runner)
   -- If a pre-parsed status is supplied (e.g. from the dashboard), skip the CLI fetch.
   if opts.status then
     vim.schedule(function()
-      dispatch(codediff, opts.status, env, repo, mode, root, diff_layout)
+      dispatch(codediff, opts.status, env, repo, mode, root, diff_layout, base)
     end)
     return
   end
@@ -279,7 +285,7 @@ function M.open(cfg, opts, runner)
         return
       end
 
-      dispatch(codediff, status, env, repo, mode, root, diff_layout)
+      dispatch(codediff, status, env, repo, mode, root, diff_layout, base)
     end)
   end, runner)
 end

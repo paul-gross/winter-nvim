@@ -1034,11 +1034,40 @@ local function draw_selection(bufnr, prev_sel)
   end
 end
 
+---Unconditionally close the dashboard: clear the WinClosed guard, stop the
+--- timer, and close the given window if it is still valid.
+--- Used by the 'o' keymap handler where we must NEVER toggle (re-open) the
+--- dashboard, even if a session :source replay already wiped the window.
+---@param win integer|nil window id captured before any session switch
+local function close_dashboard_unconditional(win)
+  -- Clear WinClosed guard.
+  if _winclosed_autocmd_id then
+    pcall(vim.api.nvim_del_autocmd, _winclosed_autocmd_id)
+    _winclosed_autocmd_id = nil
+  end
+  -- Stop and dispose the timer.
+  if _timer then
+    pcall(function()
+      _timer:stop()
+      _timer:close()
+    end)
+    _timer = nil
+  end
+  -- Close the window only if still valid (session restore may have wiped it).
+  if win and vim.api.nvim_win_is_valid(win) then
+    pcall(vim.api.nvim_win_close, win, false)
+  end
+end
+
 ---Open a diff for the given scope and mode via winter.diff.
 --- Called from dashboard quick-diff keymaps.
 ---@param scope "repo"|"env"
----@param mode? string "branch"|"uncommitted"|"staged" (default: "branch")
-local function open_dashboard_diff(scope, mode)
+---@param mode? string "branch"|"uncommitted"|"staged". When nil, falls back to
+---  the configured `cfg.diff.mode` (and finally "branch"), so the `d`/`D` keys
+---  honor the user's default diff mode rather than always diffing against main.
+---@param base? string git revision for the branch-mode base (e.g. "origin/master",
+---  "HEAD~1"). When nil, winter.diff defaults each repo to "origin/<main_branch>".
+local function open_dashboard_diff(scope, mode, base)
   local sel = M.get_selection()
   if not sel then
     vim.notify("winter.dashboard: no selection — navigate to a cell first", vim.log.levels.WARN)
@@ -1052,10 +1081,17 @@ local function open_dashboard_diff(scope, mode)
 
   local diff_opts = {
     env = env,
-    mode = mode or "branch",
+    -- Default to the configured diff mode (cfg.diff.mode) so `d`/`D` match the
+    -- user's chosen default; an explicit mode arg (from :WinterDashboardDiff)
+    -- still wins. winter.diff.open applies the same cfg.diff.mode fallback, but
+    -- resolving it here keeps the dashboard's intent explicit.
+    mode = mode or (_cfg and _cfg.diff and _cfg.diff.mode) or "branch",
     -- Pass the already-rendered status from the last refresh to avoid a
     -- redundant CLI round-trip. _last_status is set by the refresh path.
     status = _last_status,
+    -- Base revision for branch mode. nil → winter.diff defaults to
+    -- "origin/<main_branch>" per repo. Set explicitly for s/S/e/E keymaps.
+    base = base,
   }
 
   if scope == "repo" and sel.repo then
@@ -1081,6 +1117,13 @@ end
 --- Quick-diff keymaps (also installed buffer-local):
 ---   d   — repo-cell diff  (current env + repo, default branch mode)
 ---   D   — env-wide diff   (all repos in the current env, default branch mode)
+---   a   — repo diff vs origin/<main_branch>  (branch mode, default base)
+---   A   — env  diff vs origin/<main_branch>  (branch mode, default base)
+---   s   — repo diff vs origin/master         (branch mode)
+---   S   — env  diff vs origin/master         (branch mode)
+---   e   — repo diff vs HEAD~1                (branch mode)
+---   E   — env  diff vs HEAD~1                (branch mode)
+---   o   — open worktree: cd + session-switch into the selected repo worktree
 ---
 --- For uncommitted/staged variants use the buffer-local command:
 ---   :WinterDashboardDiff [repo|env] [branch|uncommitted|staged]
@@ -1129,15 +1172,84 @@ local function install_nav_keymaps(bufnr)
   vim.keymap.set("n", "<Up>", move("k"), vim.tbl_extend("force", map_opts, { desc = "Dashboard: move selection up" }))
 
   -- Quick-diff keymaps.
-  -- d = repo-cell diff (current env + repo, branch mode).
-  -- D = env-wide diff  (all repos in current env, branch mode).
-  -- For uncommitted/staged variants use :WinterDashboardDiff [repo|env] [mode].
+  -- d = repo-cell diff (current env + repo), in the configured cfg.diff.mode.
+  -- D = env-wide diff  (all repos in current env), in the configured cfg.diff.mode.
+  -- Both default to cfg.diff.mode (e.g. "uncommitted" to show dirty files);
+  -- for an explicit one-off mode use :WinterDashboardDiff [repo|env] [mode].
   vim.keymap.set("n", "d", function()
-    open_dashboard_diff("repo", "branch")
-  end, vim.tbl_extend("force", map_opts, { desc = "Dashboard: repo diff (branch)" }))
+    open_dashboard_diff("repo")
+  end, vim.tbl_extend("force", map_opts, { desc = "Dashboard: repo diff (configured mode)" }))
   vim.keymap.set("n", "D", function()
-    open_dashboard_diff("env", "branch")
-  end, vim.tbl_extend("force", map_opts, { desc = "Dashboard: env-wide diff (branch)" }))
+    open_dashboard_diff("env")
+  end, vim.tbl_extend("force", map_opts, { desc = "Dashboard: env-wide diff (configured mode)" }))
+
+  -- Branch-mode diff keymaps with explicit base revisions.
+  -- a/A = vs origin/<main_branch> (nil base → winter.diff default per repo).
+  -- s/S = vs origin/master (explicit).
+  -- e/E = vs HEAD~1 (explicit).
+  -- Lowercase = repo-scoped; uppercase = env-wide.
+  vim.keymap.set("n", "a", function()
+    open_dashboard_diff("repo", "branch", nil)
+  end, vim.tbl_extend("force", map_opts, { desc = "Dashboard: repo diff vs origin/<main_branch>" }))
+  vim.keymap.set("n", "A", function()
+    open_dashboard_diff("env", "branch", nil)
+  end, vim.tbl_extend("force", map_opts, { desc = "Dashboard: env-wide diff vs origin/<main_branch>" }))
+  vim.keymap.set("n", "s", function()
+    open_dashboard_diff("repo", "branch", "origin/master")
+  end, vim.tbl_extend("force", map_opts, { desc = "Dashboard: repo diff vs origin/master" }))
+  vim.keymap.set("n", "S", function()
+    open_dashboard_diff("env", "branch", "origin/master")
+  end, vim.tbl_extend("force", map_opts, { desc = "Dashboard: env-wide diff vs origin/master" }))
+  vim.keymap.set("n", "e", function()
+    open_dashboard_diff("repo", "branch", "HEAD~1")
+  end, vim.tbl_extend("force", map_opts, { desc = "Dashboard: repo diff vs HEAD~1" }))
+  vim.keymap.set("n", "E", function()
+    open_dashboard_diff("env", "branch", "HEAD~1")
+  end, vim.tbl_extend("force", map_opts, { desc = "Dashboard: env-wide diff vs HEAD~1" }))
+
+  -- Open the selected repo worktree in Neovim: cd + session-switch, then close
+  -- the dashboard. Close happens after switch_to so the user lands in the target
+  -- directory with the dashboard already gone (the session restore, if any, sets
+  -- up their layout into the correct cwd).
+  --
+  -- IMPORTANT: we do an UNCONDITIONAL close here, not a toggle. A session
+  -- :source replay (e.g. from use_sessions) can wipe the dashboard window
+  -- before we reach the close step. If we used M.open() (a toggle keyed on
+  -- find_dashboard_win()), it would find no window and RE-OPEN the dashboard
+  -- on top of the restored session — the exact opposite of intent, and a
+  -- leaked timer. Instead: capture the win id BEFORE switch_to, then close
+  -- it explicitly if still valid, or skip cleanly if it was already wiped.
+  vim.keymap.set("n", "o", function()
+    local sel = M.get_selection()
+    if not sel or not sel.env or not sel.repo then
+      vim.notify("winter.dashboard: no worktree selection — navigate to a repo cell first", vim.log.levels.WARN)
+      return
+    end
+    local root = workspace.find_root_from_context()
+    if not root then
+      vim.notify("winter.dashboard: not inside a winter workspace", vim.log.levels.WARN)
+      return
+    end
+    local path = root .. "/" .. sel.env .. "/" .. sel.repo
+    local label = sel.env .. "/" .. sel.repo
+    local cfg = _cfg
+    if not cfg then
+      vim.notify("winter.dashboard: dashboard has not been opened yet", vim.log.levels.WARN)
+      return
+    end
+    -- Capture the dashboard window id BEFORE switching so we can close it
+    -- unconditionally afterward, even if a session :source wiped it already.
+    local dash_win = (_bufnr and vim.api.nvim_buf_is_valid(_bufnr)) and (vim.fn.win_findbuf(_bufnr)[1] or nil) or nil
+    require("winter.session").switch_to(path, label, {
+      use_sessions = cfg.use_sessions,
+      create_sessions = cfg.create_sessions,
+      session_dir = cfg.session_dir,
+      cd_command = cfg.cd_command,
+    })
+    -- Unconditional close: clear the guard and timer, close the window if
+    -- still valid (session restore may have already wiped it).
+    close_dashboard_unconditional(dash_win)
+  end, vim.tbl_extend("force", map_opts, { desc = "Dashboard: open worktree (cd + session)" }))
 
   -- Close the dashboard window (buffer stays alive/hidden).
   -- Snacks disables its own default 'q' handler above; we install our own so

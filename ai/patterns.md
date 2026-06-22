@@ -47,7 +47,7 @@ The root is the first ancestor directory containing a `.winter/` directory. This
 
 ## CLI contract
 
-The dashboard's correctness is coupled to the `winter ws status --json` output at `schema_version: 1`. The specific fields consumed are:
+The dashboard and its diff actions are coupled to the `winter ws status --json` output at `schema_version: 1`. The specific fields consumed are:
 
 | Field | Used for |
 |---|---|

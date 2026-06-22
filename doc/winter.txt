@@ -291,8 +291,15 @@ Dashboard keymaps (buffer-local):
   `h` / `<Left>`   Move selection left (prev env column)
   `j` / `<Down>`   Move selection down (next repo row)
   `k` / `<Up>`     Move selection up (prev repo row)
-  `d`              Open a repo diff for the selected cell (branch mode)
-  `D`              Open an env-wide diff for the selected env (branch mode)
+  `d`              Open a repo diff for the selected cell (uses config.diff.mode)
+  `D`              Open an env-wide diff for the selected env (uses config.diff.mode)
+  `a`              Open a repo diff vs main (origin/<main_branch>, fixed)
+  `A`              Open an env-wide diff vs main (all repos, fixed)
+  `s`              Open a repo diff vs master (origin/master, fixed)
+  `S`              Open an env-wide diff vs master (all repos, fixed)
+  `e`              Open a repo diff vs the previous commit (HEAD~1, fixed)
+  `E`              Open an env-wide diff vs HEAD~1 (all repos, fixed)
+  `o`              Open selected worktree in Neovim (cd + session switch); closes dashboard
   `q`              Close the dashboard window (buffer stays alive/hidden)
 
 For uncommitted or staged diff variants, use |:WinterDashboardDiff|.

@@ -246,20 +246,37 @@ Opens a persistent workspace status panel (toggled open/closed) showing all feat
 | `h` / `<Left>` | Move selection left (prev env column) |
 | `j` / `<Down>` | Move selection down (next repo row) |
 | `k` / `<Up>` | Move selection up (prev repo row) |
-| `d` | Open a repo diff for the selected cell (codediff branch mode) |
-| `D` | Open an env-wide diff for the selected env (codediff branch mode) |
+| `d` | Open a repo diff for the selected cell (uses `config.diff.mode`) |
+| `D` | Open an env-wide diff for the selected env (uses `config.diff.mode`) |
+| `a` | Open a repo diff vs main (`origin/<main_branch>`) |
+| `A` | Open an env-wide diff vs main (all repos) |
+| `s` | Open a repo diff vs master (`origin/master`) |
+| `S` | Open an env-wide diff vs master (all repos) |
+| `e` | Open a repo diff vs the previous commit (`HEAD~1`) |
+| `E` | Open an env-wide diff vs `HEAD~1` (all repos) |
+| `o` | Open the selected worktree in Neovim (cd + session switch); closes the dashboard |
 | `q` | Close the dashboard window (buffer stays alive in background) |
 
-Press `d` or `D` to open a diff in a new tab from the dashboard; see `:WinterDashboardDiff` below.
-For uncommitted or staged variants use `:WinterDashboardDiff [scope] [mode]`.
+Press `d` or `D` to open a diff in a new tab from the dashboard. Both use the
+configured `config.diff.mode` (default `branch`) — set `diff.mode = "uncommitted"`
+to make `d`/`D` show working-tree (dirty) changes instead of the diff against
+`origin/<main>`. For a one-off mode override use `:WinterDashboardDiff [scope] [mode]`.
+
+The base-specific keys `a`/`A`, `s`/`S`, and `e`/`E` always open a committed diff
+against a fixed base (`origin/<main_branch>`, `origin/master`, and `HEAD~1`
+respectively) regardless of `config.diff.mode`. Note: for repos whose main branch
+IS `master`, `a` (vs `origin/<main_branch>`) and `s` (vs `origin/master`) resolve
+to the same base — they differ only for repos whose main branch is not `master`
+(e.g. `main`). `o` resolves the selected worktree path and switches the active
+Neovim session into it via `session.switch_to`, then closes the dashboard.
 
 #### `:WinterDashboardDiff [scope] [mode]`
 
 Buffer-local command available inside the dashboard buffer:
 
 ```vim
-:WinterDashboardDiff              " repo diff, branch mode (same as d)
-:WinterDashboardDiff env          " env-wide diff, branch mode (same as D)
+:WinterDashboardDiff              " repo diff, branch mode (explicit; d uses config.diff.mode)
+:WinterDashboardDiff env          " env-wide diff, branch mode (explicit; D uses config.diff.mode)
 :WinterDashboardDiff repo uncommitted  " repo uncommitted diff
 :WinterDashboardDiff env staged        " env staged diff (routes to uncommitted explorer)
 ```
@@ -283,7 +300,7 @@ require("winter").dashboard_diff({ scope = "repo", mode = "branch" })
 require("winter").dashboard_diff({ scope = "env",  mode = "uncommitted" })
 ```
 
-The `_last_status` cache in `dashboard.lua` means the quick-diff keymaps reuse the already-fetched status — no extra CLI round-trip when pressing `d` or `D` immediately after the dashboard renders.
+The `_last_status` cache in `dashboard.lua` means the quick-diff keymaps reuse the already-fetched status — no extra CLI round-trip when pressing any of the diff keys (`d`/`D`, `a`/`A`, `s`/`S`, `e`/`E`) after the dashboard renders.
 
 #### Dashboard state colors
 
@@ -302,12 +319,18 @@ Environment name badges (extension indicators) are rendered in `WinterDashBadge`
 
 #### Quick-diffs (codediff.nvim)
 
-`d` opens a branch diff for the currently selected repo cell; `D` opens an env-wide diff covering all repo worktrees in the selected env. Both open in a new codediff tab (`:WinterDiff` behaviour). For uncommitted or staged variants use `:WinterDashboardDiff`:
+`d` opens a diff for the currently selected repo cell (using `config.diff.mode`); `D` opens an env-wide diff for all repos. The base-specific keys open committed diffs against a fixed revision regardless of mode. All of these open in a new codediff tab (`:WinterDiff` behaviour). For uncommitted or staged variants use `:WinterDashboardDiff`:
 
-| Keymap / command | Scope | Mode |
+| Keymap / command | Scope | Base / mode |
 |---|---|---|
-| `d` | repo | branch |
-| `D` | env | branch |
+| `d` | repo | `config.diff.mode` (default: `origin/<main_branch>`) |
+| `D` | env | `config.diff.mode` (default: all repos) |
+| `a` | repo | `origin/<main_branch>` (fixed) |
+| `A` | env | `origin/<main_branch>` (fixed, all repos) |
+| `s` | repo | `origin/master` (fixed) |
+| `S` | env | `origin/master` (fixed, all repos) |
+| `e` | repo | `HEAD~1` (fixed) |
+| `E` | env | `HEAD~1` (fixed, all repos) |
 | `:WinterDashboardDiff repo uncommitted` | repo | uncommitted |
 | `:WinterDashboardDiff env staged` | env | staged (routes to uncommitted explorer) |
 
@@ -517,7 +540,7 @@ The test suite covers:
 - `diff.open()` — codediff spy tests (branch/uncommitted/staged dispatch), degrade notify when
   codediff absent, `WinterDiffOpened` event fires with correct data, CLI fetch argv shape
 - Dashboard: buffer attributes, keymaps, refresh flow, status parsing, selection navigation,
-  quick-diff dispatch (`d`/`D`), `:WinterDashboardDiff` command
+  quick-diff dispatch (`d`/`D`, `a`/`A`, `s`/`S`, `e`/`E`), `o` open-session action, `:WinterDashboardDiff` command
 
 ---
 
