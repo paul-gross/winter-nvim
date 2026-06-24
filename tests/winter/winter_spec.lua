@@ -1457,7 +1457,7 @@ end
 -- Canned multi-env status table that exercises all cell variants:
 --   clean repo (·), ahead-only, behind-only, dirty 1 and N,
 --   tracking divergence, unborn upstream, pinned repo, env badges,
---   and a source_checkouts row.
+--   and project + standalone checkout rows.
 local canned_status = {
   schema_version = 1,
   dashboard = { resolved_layout = "repos-as-rows" },
@@ -1671,9 +1671,13 @@ local canned_status = {
       },
     },
   },
-  source_checkouts = {
+  projects = {
     { repo = "winter-src", branch = "master", behind_origin = 1, ahead_origin = 0, dirty = 0 },
     { repo = "other-src", branch = "main", behind_origin = 0, ahead_origin = 2, dirty = 3 },
+  },
+  standalones = {
+    { repo = "ext-harness", branch = "master", behind_origin = 0, ahead_origin = 0, dirty = 0 },
+    { repo = "ext-github", branch = "topic", behind_origin = 2, ahead_origin = 0, dirty = 4 },
   },
 }
 
@@ -1944,7 +1948,7 @@ T["dashboard.build_grid: highlight byte ranges are within line bounds"] = functi
   MiniTest.expect.equality(ok, true)
 end
 
-T["dashboard.build_grid: source_checkouts section renders both repos"] = function()
+T["dashboard.build_grid: projects section renders both repos"] = function()
   local dashboard = require("winter.dashboard")
   local grid = dashboard.build_grid(canned_status)
 
@@ -1962,7 +1966,43 @@ T["dashboard.build_grid: source_checkouts section renders both repos"] = functio
   MiniTest.expect.equality(has_other_src, true)
 end
 
-T["dashboard.build_grid: source_checkouts behind_origin=1 gets WinterDashBehind"] = function()
+T["dashboard.build_grid: standalones section renders both repos"] = function()
+  local dashboard = require("winter.dashboard")
+  local grid = dashboard.build_grid(canned_status)
+
+  local has_harness = false
+  local has_github = false
+  for _, line in ipairs(grid.lines) do
+    if line:find("ext-harness", 1, true) then
+      has_harness = true
+    end
+    if line:find("ext-github", 1, true) then
+      has_github = true
+    end
+  end
+  MiniTest.expect.equality(has_harness, true)
+  MiniTest.expect.equality(has_github, true)
+end
+
+T["dashboard.build_grid: a 'Projects' and a 'Standalones' header are rendered"] = function()
+  local dashboard = require("winter.dashboard")
+  local grid = dashboard.build_grid(canned_status)
+
+  local has_projects_hdr = false
+  local has_standalones_hdr = false
+  for _, line in ipairs(grid.lines) do
+    if line == "Projects" then
+      has_projects_hdr = true
+    end
+    if line == "Standalones" then
+      has_standalones_hdr = true
+    end
+  end
+  MiniTest.expect.equality(has_projects_hdr, true)
+  MiniTest.expect.equality(has_standalones_hdr, true)
+end
+
+T["dashboard.build_grid: projects behind_origin=1 gets WinterDashBehind"] = function()
   local dashboard = require("winter.dashboard")
   local grid = dashboard.build_grid(canned_status)
 
@@ -1983,7 +2023,42 @@ T["dashboard.build_grid: source_checkouts behind_origin=1 gets WinterDashBehind"
   MiniTest.expect.equality(found, true)
 end
 
-T["dashboard.build_grid: source_checkouts standalone cells registered"] = function()
+T["dashboard.build_grid: standalone dirty count gets WinterDashDirty"] = function()
+  local dashboard = require("winter.dashboard")
+  local grid = dashboard.build_grid(canned_status)
+
+  -- ext-github has dirty=4 → "4 files" with WinterDashDirty.
+  local found = false
+  for _, hl in ipairs(grid.highlights) do
+    if hl.hl_group == "WinterDashDirty" then
+      local line = grid.lines[hl.row + 1]
+      if line and line:find("ext-github", 1, true) then
+        local sliced = line:sub(hl.col_start + 1, hl.col_end)
+        if sliced == "4 files" then
+          found = true
+          break
+        end
+      end
+    end
+  end
+  MiniTest.expect.equality(found, true)
+end
+
+T["dashboard.build_grid: project cells registered with kind 'project'"] = function()
+  local dashboard = require("winter.dashboard")
+  local grid = dashboard.build_grid(canned_status)
+
+  local project_cells = {}
+  for _, cell in ipairs(grid.cells) do
+    if cell.kind == "project" then
+      project_cells[#project_cells + 1] = cell
+    end
+  end
+  -- Two project checkouts → two project cells.
+  MiniTest.expect.equality(#project_cells, 2)
+end
+
+T["dashboard.build_grid: standalone cells registered with kind 'standalone'"] = function()
   local dashboard = require("winter.dashboard")
   local grid = dashboard.build_grid(canned_status)
 
@@ -1993,23 +2068,26 @@ T["dashboard.build_grid: source_checkouts standalone cells registered"] = functi
       sc_cells[#sc_cells + 1] = cell
     end
   end
-  -- Two source checkouts → two standalone cells.
+  -- Two standalones → two standalone cells.
   MiniTest.expect.equality(#sc_cells, 2)
 end
 
-T["dashboard.build_grid: empty source_checkouts renders '(none)'"] = function()
+T["dashboard.build_grid: empty projects and standalones render '(none)' per section"] = function()
   local dashboard = require("winter.dashboard")
-  local status_no_sc = vim.tbl_deep_extend("force", canned_status, { source_checkouts = {} })
-  local grid = dashboard.build_grid(status_no_sc)
+  local status_empty = vim.tbl_deep_extend("force", canned_status, { projects = {}, standalones = {} })
+  -- tbl_deep_extend merges list tables by index, so force an outright replace.
+  status_empty.projects = {}
+  status_empty.standalones = {}
+  local grid = dashboard.build_grid(status_empty)
 
-  local found = false
+  local none_count = 0
   for _, line in ipairs(grid.lines) do
     if line:find("(none)", 1, true) then
-      found = true
-      break
+      none_count = none_count + 1
     end
   end
-  MiniTest.expect.equality(found, true)
+  -- One "(none)" under Projects, one under Standalones.
+  MiniTest.expect.equality(none_count, 2)
 end
 
 T["dashboard.build_grid: pinned repo has WinterDashBadge highlight on its row"] = function()
@@ -2172,7 +2250,8 @@ T["dashboard.build_grid: behind origin/master suppresses redundant cyan marker"]
         },
       },
     },
-    source_checkouts = {},
+    projects = {},
+    standalones = {},
   }
   local grid = dashboard.build_grid(status)
 
@@ -2233,7 +2312,8 @@ T["dashboard.build_grid: feature branch tracking divergence still shows cyan mar
         },
       },
     },
-    source_checkouts = {},
+    projects = {},
+    standalones = {},
   }
   local grid = dashboard.build_grid(status)
 

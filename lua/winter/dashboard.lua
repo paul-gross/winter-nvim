@@ -163,7 +163,7 @@ end
 --- row index is the repo ordinal (order of first appearance) — matching the
 --- visual repos-as-rows layout produced by build_grid.
 ---
---- MVP: standalone/source-checkout rows do NOT participate in navigation.
+--- MVP: project/standalone checkout rows do NOT participate in navigation.
 --- They are not part of the env × repo matrix; adding them would require a
 --- separate linear model with different wrap semantics. A comment here
 --- documents the omission so Phase 6 can address it if desired.
@@ -292,7 +292,7 @@ end
 ---@field row integer   0-based buffer line
 ---@field col_start integer byte offset (0-based)
 ---@field col_end integer   byte offset (exclusive)
----@field kind string   "env"|"repo"|"worktree"|"standalone"
+---@field kind string   "env"|"repo"|"worktree"|"project"|"standalone"
 ---@field env string|nil
 ---@field repo string|nil
 
@@ -416,8 +416,8 @@ local function render_worktree_cell(wt)
   return text, spans
 end
 
--- Render a source-checkout status cell and collect spans.
-local function render_source_cell(sc)
+-- Render a checkout status cell (project or standalone) and collect spans.
+local function render_checkout_cell(sc)
   local behind = sc.behind_origin or 0
   local ahead = sc.ahead_origin or 0
   local dirty = sc.dirty or 0
@@ -518,7 +518,8 @@ function M.build_grid(status)
   end
 
   local envs = status.environments or {}
-  local source_checkouts = status.source_checkouts or {}
+  local projects = status.projects or {}
+  local standalones = status.standalones or {}
 
   -- -------------------------------------------------------------------------
   -- Determine resolved layout
@@ -810,54 +811,66 @@ function M.build_grid(status)
   end
 
   -- -------------------------------------------------------------------------
-  -- Section 2: standalone / source-checkout table
+  -- Section 2: projects + standalones tables
   -- -------------------------------------------------------------------------
 
-  add_line("")
-  add_line("Standalone / Source Checkouts")
-  local sc_header_row = #lines - 1
-  add_hl(sc_header_row, 0, #lines[sc_header_row + 1], "WinterDashHeader")
-  local sc_sep = string.rep("─", 40)
-  add_line(sc_sep)
-  add_hl(#lines - 1, 0, #sc_sep, "WinterDashClean")
+  -- Render one "  REPO  BRANCH  <sync/dirty cell>" table under a bold header.
+  -- `rows` is an array of checkout snapshots (ProjectCheckoutSnapshot or
+  -- StandaloneCheckoutSnapshot); each carries repo/branch plus the
+  -- ahead_origin/behind_origin/dirty fields render_checkout_cell reads.
+  -- `cell_kind` tags the recorded cells; both kinds are non-navigable
+  -- (build_nav_grid includes only worktree cells).
+  local function render_checkout_section(title, rows, cell_kind)
+    add_line("")
+    add_line(title)
+    local header_row = #lines - 1
+    add_hl(header_row, 0, #lines[header_row + 1], "WinterDashHeader")
+    local sep = string.rep("─", 40)
+    add_line(sep)
+    add_hl(#lines - 1, 0, #sep, "WinterDashClean")
 
-  if #source_checkouts == 0 then
-    add_line("(none)")
-  else
+    if #rows == 0 then
+      add_line("(none)")
+      return
+    end
+
     -- Compute repo label width for alignment.
-    local sc_label_w = 4
-    for _, sc in ipairs(source_checkouts) do
+    local label_w = 4
+    for _, sc in ipairs(rows) do
       local w = #(sc.repo or "?")
-      if w > sc_label_w then
-        sc_label_w = w
+      if w > label_w then
+        label_w = w
       end
     end
-    sc_label_w = sc_label_w + 2 -- padding
+    label_w = label_w + 2 -- padding
 
-    for _, sc in ipairs(source_checkouts) do
+    for _, sc in ipairs(rows) do
       local repo = sc.repo or "?"
       local branch = sc.branch or "?"
-      local cell_text, spans = render_source_cell(sc)
+      local cell_text, spans = render_checkout_cell(sc)
 
       -- Build: "  <repo padded>  <branch>  <cell_text>"
-      local label_pad = repo .. string.rep(" ", sc_label_w - #repo)
+      local label_pad = repo .. string.rep(" ", label_w - #repo)
       local prefix = "  " .. label_pad .. "  " .. branch .. "  "
-      local sc_line = prefix .. cell_text
+      local row_line = prefix .. cell_text
 
-      add_line(sc_line)
-      local sc_row = #lines - 1
+      add_line(row_line)
+      local row_idx = #lines - 1
 
-      -- Record standalone cell.
-      local sc_cell_start = #prefix
-      local sc_cell_end = #sc_line
-      add_cell(sc_row, sc_cell_start, sc_cell_end, "standalone", nil, repo)
+      -- Record the checkout cell.
+      local cell_start = #prefix
+      local cell_end = #row_line
+      add_cell(row_idx, cell_start, cell_end, cell_kind, nil, repo)
 
       -- Translate spans to line-absolute positions.
       for _, sp in ipairs(spans) do
-        add_hl(sc_row, sc_cell_start + sp[1], sc_cell_start + sp[2], sp[3])
+        add_hl(row_idx, cell_start + sp[1], cell_start + sp[2], sp[3])
       end
     end
   end
+
+  render_checkout_section("Projects", projects, "project")
+  render_checkout_section("Standalones", standalones, "standalone")
 
   return { lines = lines, cells = cells, highlights = highlights }
 end
