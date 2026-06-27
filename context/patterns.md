@@ -58,4 +58,4 @@ The dashboard and its diff actions are coupled to the `winter ws status --json` 
 | `env.extensions` | badge values rendered in `WinterDashBadge` |
 | `status.dashboard.resolved_layout` | layout orientation (`"repos-as-rows"` or future values) |
 
-See `workspace:/ai/winter-cli/usage/ws/status.md` for the full `ws status --json` wire contract. When the CLI schema changes, re-verify these field paths before shipping.
+See `workspace:/context/winter-cli/usage/ws/status.md` for the full `ws status --json` wire contract. When the CLI schema changes, re-verify these field paths before shipping.

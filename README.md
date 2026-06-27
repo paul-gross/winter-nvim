@@ -368,7 +368,7 @@ require("winter").setup({
 })
 ```
 
-The dashboard window is rendered through `Snacks.win` — already a hard dependency of the worktrees picker, so no additional package is required. See [ai/dashboard-layout-decision.md](./ai/dashboard-layout-decision.md) for the snacks-vs-nui-vs-handrolled rationale.
+The dashboard window is rendered through `Snacks.win` — already a hard dependency of the worktrees picker, so no additional package is required. See [context/dashboard-layout-decision.md](./context/dashboard-layout-decision.md) for the snacks-vs-nui-vs-handrolled rationale.
 
 #### Scope note — Textual-only plugin surface
 
@@ -483,7 +483,7 @@ point in `lua/winter/init.lua` and a `:Winter <feature>` subcommand in
 `plugin/winter.lua`. Adding a new feature is a clean, obvious addition to each
 of those three files.
 
-See [ai/patterns.md](./ai/patterns.md) for the implicit conventions every feature module follows (async-via-cli-seam, pcall-wrap-Ex-commands, degrade-don't-error, feature module shape, and root discovery).
+See [context/patterns.md](./context/patterns.md) for the implicit conventions every feature module follows (async-via-cli-seam, pcall-wrap-Ex-commands, degrade-don't-error, feature module shape, and root discovery).
 
 ---
 
