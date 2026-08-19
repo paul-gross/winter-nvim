@@ -411,7 +411,7 @@ with `cwd` set to the workspace root. The `global-args` come from
 `config.winter_args` (or the per-invocation override). The command returns a
 JSON array; each element has these keys: `kind` (`"worktree"` or
 `"standalone"`), `env`, `repo`, `name`, `label`, and `path`. The `label`
-(e.g. `"alpha/winter"` or `"winter-harness"`) is what the fuzzy matcher
+(e.g. `"alpha/winter"` or `"winter-context"`) is what the fuzzy matcher
 operates on.
 
 The CLI call is **asynchronous**: the picker is driven by a native snacks

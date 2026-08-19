@@ -42,7 +42,7 @@ Data for the worktrees picker is sourced by shelling out to: >
 The command returns a JSON array of worktree descriptors; each element has
 these keys: `kind` ("worktree" or "standalone"), `env`, `repo`, `name`,
 `label`, and `path` (absolute). The `label` field (e.g. "alpha/winter" or
-"winter-harness") is what the fuzzy matcher operates on.
+"winter-context") is what the fuzzy matcher operates on.
 
 The dashboard calls `winter ws status --json` asynchronously, parses the
 result, and renders the env×repo grid in a persistent `nofile` buffer.

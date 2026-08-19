@@ -164,7 +164,7 @@ end
 local sample_json = [[
   [
     {"kind":"worktree","env":"alpha","repo":"winter","name":null,"label":"alpha/winter","path":"/ws/alpha/winter"},
-    {"kind":"standalone","env":null,"repo":null,"name":"winter-harness","label":"winter-harness","path":"/ws/winter-harness"}
+    {"kind":"standalone","env":null,"repo":null,"name":"winter-context","label":"winter-context","path":"/ws/winter-context"}
   ]
 ]]
 
@@ -190,7 +190,7 @@ T["cli.run_async with fake runner delivers raw result on success"] = function()
   MiniTest.expect.equality(ok, true)
   MiniTest.expect.equality(#decoded, 2)
   MiniTest.expect.equality(decoded[1].label, "alpha/winter")
-  MiniTest.expect.equality(decoded[2].label, "winter-harness")
+  MiniTest.expect.equality(decoded[2].label, "winter-context")
 end
 
 T["cli.run_async with fake runner delivers nil + error on non-zero exit"] = function()
@@ -269,7 +269,7 @@ local diff_status = {
       worktrees = {
         { repo = "winter", branch = "epsilon", main_branch = "master" },
         { repo = "winter-nvim", branch = "epsilon", main_branch = "master" },
-        { repo = "winter-harness", branch = "epsilon", main_branch = "main" },
+        { repo = "winter-context", branch = "epsilon", main_branch = "main" },
       },
     },
     {
@@ -306,9 +306,9 @@ T["diff.build_specs: branch mode → one spec per repo with correct base/target/
   MiniTest.expect.equality(specs[1].target, "HEAD")
   MiniTest.expect.equality(specs[1].label, "epsilon/winter")
 
-  -- Third spec: winter-harness uses main_branch="main"
+  -- Third spec: winter-context uses main_branch="main"
   MiniTest.expect.equality(specs[3].base, "origin/main")
-  MiniTest.expect.equality(specs[3].label, "epsilon/winter-harness")
+  MiniTest.expect.equality(specs[3].label, "epsilon/winter-context")
 end
 
 T["diff.build_specs: repo scope → single spec for that repo"] = function()
@@ -353,7 +353,7 @@ T["diff.build_specs: no base option → default origin/<main_branch> per repo"] 
   -- winter and winter-nvim have main_branch="master"
   MiniTest.expect.equality(specs[1].base, "origin/master")
   MiniTest.expect.equality(specs[2].base, "origin/master")
-  -- winter-harness has main_branch="main"
+  -- winter-context has main_branch="main"
   MiniTest.expect.equality(specs[3].base, "origin/main")
   -- target is always HEAD
   MiniTest.expect.equality(specs[1].target, "HEAD")
@@ -387,15 +387,15 @@ T["diff.build_specs: opts.base with repo filter → single spec with overridden 
   local diff = require("winter.diff")
   local specs = diff.build_specs(
     diff_status,
-    { env = "epsilon", repo = "winter-harness", workspace_root = "/ws", base = "HEAD~1" },
+    { env = "epsilon", repo = "winter-context", workspace_root = "/ws", base = "HEAD~1" },
     exists_all
   )
 
   MiniTest.expect.equality(#specs, 1)
-  MiniTest.expect.equality(specs[1].root, "/ws/epsilon/winter-harness")
+  MiniTest.expect.equality(specs[1].root, "/ws/epsilon/winter-context")
   MiniTest.expect.equality(specs[1].base, "HEAD~1")
   MiniTest.expect.equality(specs[1].target, "HEAD")
-  MiniTest.expect.equality(specs[1].label, "epsilon/winter-harness")
+  MiniTest.expect.equality(specs[1].label, "epsilon/winter-context")
 end
 
 T["diff.build_specs: opts.base does not affect skipped repos (exists_fn respected)"] = function()
@@ -423,8 +423,8 @@ T["diff.build_roots: returns one root per repo with correct path and label"] = f
   MiniTest.expect.equality(#roots, 3)
   MiniTest.expect.equality(roots[1].root, "/ws/epsilon/winter")
   MiniTest.expect.equality(roots[1].label, "epsilon/winter")
-  MiniTest.expect.equality(roots[3].root, "/ws/epsilon/winter-harness")
-  MiniTest.expect.equality(roots[3].label, "epsilon/winter-harness")
+  MiniTest.expect.equality(roots[3].root, "/ws/epsilon/winter-context")
+  MiniTest.expect.equality(roots[3].label, "epsilon/winter-context")
 end
 
 T["diff.build_roots: repo scope → single root"] = function()
@@ -965,14 +965,14 @@ end
 local sample_with_status = [[
   [
     {"kind":"worktree","env":"alpha","repo":"winter","name":null,"label":"alpha/winter","path":"/ws/alpha/winter","ahead":0,"behind":3,"dirty":2},
-    {"kind":"standalone","env":null,"repo":null,"name":"winter-harness","label":"winter-harness","path":"/ws/winter-harness","ahead":1,"behind":0,"dirty":0}
+    {"kind":"standalone","env":null,"repo":null,"name":"winter-context","label":"winter-context","path":"/ws/winter-context","ahead":1,"behind":0,"dirty":0}
   ]
 ]]
 
 local sample_without_status = [[
   [
     {"kind":"worktree","env":"alpha","repo":"winter","name":null,"label":"alpha/winter","path":"/ws/alpha/winter"},
-    {"kind":"standalone","env":null,"repo":null,"name":"winter-harness","label":"winter-harness","path":"/ws/winter-harness"}
+    {"kind":"standalone","env":null,"repo":null,"name":"winter-context","label":"winter-context","path":"/ws/winter-context"}
   ]
 ]]
 
@@ -992,7 +992,7 @@ T["worktrees.parse_items parses items with status fields (ahead/behind/dirty)"] 
   MiniTest.expect.equality(first.dirty, 2)
 
   local second = items[2]
-  MiniTest.expect.equality(second.label, "winter-harness")
+  MiniTest.expect.equality(second.label, "winter-context")
   MiniTest.expect.equality(second.ahead, 1)
   MiniTest.expect.equality(second.behind, 0)
   MiniTest.expect.equality(second.dirty, 0)
@@ -1014,7 +1014,7 @@ T["worktrees.parse_items parses items without status fields (fields are nil)"] =
   MiniTest.expect.equality(first.dirty, nil)
 
   local second = items[2]
-  MiniTest.expect.equality(second.label, "winter-harness")
+  MiniTest.expect.equality(second.label, "winter-context")
   MiniTest.expect.equality(second.ahead, nil)
   MiniTest.expect.equality(second.behind, nil)
   MiniTest.expect.equality(second.dirty, nil)
@@ -1173,7 +1173,7 @@ T["cli JSON parsing: two-element payload has correct shape"] = function()
   local sample = vim.json.decode([[
     [
       {"kind":"worktree","env":"alpha","repo":"winter","name":null,"label":"alpha/winter","path":"/ws/alpha/winter"},
-      {"kind":"standalone","env":null,"repo":null,"name":"winter-harness","label":"winter-harness","path":"/ws/winter-harness"}
+      {"kind":"standalone","env":null,"repo":null,"name":"winter-context","label":"winter-context","path":"/ws/winter-context"}
     ]
   ]])
 
@@ -1188,8 +1188,8 @@ T["cli JSON parsing: two-element payload has correct shape"] = function()
 
   local second = sample[2]
   MiniTest.expect.equality(second.kind, "standalone")
-  MiniTest.expect.equality(second.label, "winter-harness")
-  MiniTest.expect.equality(second.path, "/ws/winter-harness")
+  MiniTest.expect.equality(second.label, "winter-context")
+  MiniTest.expect.equality(second.path, "/ws/winter-context")
   -- null becomes vim.NIL in Lua
   MiniTest.expect.equality(second.env, vim.NIL)
 end
